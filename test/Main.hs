@@ -22,6 +22,9 @@ import Network.PeerDiscovery.Types
 -- - Abstract the network layer away to be able to use mockup routing for
 --   large-scale testing.
 --
+-- - Prevent ourselves from entering the routing table and being part of the
+--   result of peer lookup - we don't want to talk to ourselves.
+--
 -- NOT CLEAR:
 --
 -- - Exclude peers with non-zero amount of timeouts from being returned by
