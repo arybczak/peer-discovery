@@ -1,0 +1,15 @@
+resolver: lts-9.14
+
+packages:
+- '.'
+
+extra-deps:
+- containers-0.5.10.2
+- cborg-0.1.1.0
+- serialise-0.1.0.0
+
+flags:
+  serialise:
+    newtime15: true
+
+extra-package-dbs: []
