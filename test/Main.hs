@@ -72,28 +72,34 @@ import Network.PeerDiscovery.Types
 -- | Start multiple peer discovery instances.
 withPeerDiscoveries
   :: Config
-  -> [(Maybe HostName, PortNumber)]
+  -> [(Bool, Maybe HostName, PortNumber)]
   -> ([PeerDiscovery] -> IO r)
   -> IO r
 withPeerDiscoveries conf connInfos k = go [] connInfos
   where
     go acc = \case
-      []                   -> k (reverse acc)
-      ((mhost, port):rest) -> do
-        withPeerDiscovery conf mhost port $ \pd -> go (pd : acc) rest
+      []                                -> k (reverse acc)
+      ((joinNetwork, mhost, port):rest) -> do
+        withPeerDiscovery conf joinNetwork mhost port $ \pd ->
+          go (pd : acc) rest
 
 main :: IO ()
 main = do
-  let connInfos = map (Just "127.0.0.1", ) [3000..3200]
+  let connInfos = map (True, Just "127.0.0.1", ) [3000..3200]
   withPeerDiscoveries defaultConfig connInfos $ \pds -> do
 
-    let peers = let xs = map pdBindAddr pds in map (\x -> [x]) (last xs : init xs)
-    zipWithM_ (\pd peer -> do
+    let nodes = let xs = map (\pd -> Node { nodeId = mkPeerId $ pdPublicKey pd
+                                          , nodePeer = pdBindAddr pd
+                                          }) pds
+                in last xs : init xs
+    zipWithM_ (\pd node -> do
                   putStrLn $ "Bootstrapping " ++ show (pdBindAddr pd)
-                  bootstrap True pd peer
-              ) pds peers
+                  bootstrap pd node
+              ) pds nodes
 
     let pd1 = head pds
         pd2 = pds !! 100
     pPrint =<< readMVar (pdRoutingTable pd1)
-    pPrint =<< peerLookup pd1 (mkPeerId $ pdBindAddr pd2)
+    let targetId = mkPeerId $ pdPublicKey pd2
+    pPrint . map (\x -> let d = distance targetId (nodeId x) in (length (show d), d, x))
+      =<< peerLookup pd1 targetId

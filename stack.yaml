@@ -6,6 +6,7 @@ packages:
 extra-deps:
 - containers-0.5.10.2
 - cborg-0.1.1.0
+- cryptonite-0.24
 - serialise-0.1.0.0
 
 flags:

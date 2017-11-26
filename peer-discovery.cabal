@@ -27,7 +27,7 @@ library
                        bytestring,
                        cborg,
                        containers >= 0.5.8,
-                       cryptonite,
+                       cryptonite >= 0.24,
                        memory,
                        network,
                        random,

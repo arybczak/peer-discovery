@@ -2,23 +2,26 @@ module Network.PeerDiscovery.Communication.Types
   ( Signal(..)
   , sendSignal
   , Request(..)
-  , FindPeer(..)
+  , FindNode(..)
   , Ping(..)
-  , RequestAddress(..)
+  , RequestAuth(..)
   , Response(..)
-  , ReturnPeers(..)
+  , ReturnNodes(..)
   , Pong(..)
-  , AddressableAs(..)
+  , AuthProof(..)
   ) where
 
 import Codec.CBOR.Decoding
 import Codec.CBOR.Encoding
 import Codec.Serialise
 import Control.Monad
-import Data.Functor.Identity
 import Data.Monoid
 import Network.Socket hiding (recvFrom, sendTo)
 import Network.Socket.ByteString
+import qualified Crypto.Error as C
+import qualified Crypto.PubKey.Ed25519 as C
+import qualified Data.ByteArray as BA
+import qualified Data.ByteString as BS
 
 import Network.PeerDiscovery.Types
 import Network.PeerDiscovery.Util
@@ -39,78 +42,91 @@ instance Serialise Signal where
       n -> fail $ "decode(Signal): invalid tag: " ++ show n
 
 sendSignal :: Socket -> Signal -> Peer -> IO ()
-sendSignal sock signal Peer{..} =
+sendSignal sock signal Peer{..} = do
+  let sig = serialise' signal
+  putStrLn $ "Sending " ++ show (BS.length sig) ++ " bytes"
   void $ sendTo sock (serialise' signal) (SockAddrInet peerPort peerAddress)
 
 ----------------------------------------
 
-data Request = FindPeerR !FindPeer
+data Request = FindNodeR !FindNode
              | PingR !Ping
-             | RequestAddressR !RequestAddress
+             | RequestAuthR !RequestAuth
   deriving (Eq, Show)
 
-data FindPeer = FindPeer !(Maybe PortNumber) !PeerId
+data FindNode = FindNode !PeerId !(Maybe PortNumber) !PeerId
   deriving (Eq, Show)
 
 data Ping = Ping
   deriving (Eq, Show)
 
-data RequestAddress = RequestAddress !PortNumber
+data RequestAuth = RequestAuth !Nonce
   deriving (Eq, Show)
 
 instance Serialise Request where
   encode = \case
-    FindPeerR (FindPeer mport nid) ->
-      encodeListLen 3 <> encodeWord 0 <> encodePortNumber mport <> encode nid
+    FindNodeR (FindNode peerId mport targetId) ->
+         encodeListLen 4 <> encodeWord 0
+      <> encode peerId <> encodePortNumber mport <> encode targetId
     PingR Ping ->
       encodeListLen 1 <> encodeWord 1
-    RequestAddressR (RequestAddress port) ->
-      encodeListLen 2 <> encodeWord 2 <> encodePortNumber (Identity port)
+    RequestAuthR (RequestAuth nonce) ->
+      encodeListLen 2 <> encodeWord 2 <> encode nonce
   decode = do
     len <- decodeListLen
     decodeWord >>= \case
-      0 -> FindPeerR <$> do
-        matchSize 3 "decode(Request).FindPeerR" len
-        FindPeer <$> decodePortNumber <*> decode
+      0 -> FindNodeR <$> do
+        matchSize 4 "decode(Request).FindNodeR" len
+        FindNode <$> decode <*> decodePortNumber <*> decode
       1 -> PingR <$> do
         matchSize 1 "decode(Request).PingR" len
         pure Ping
-      2 -> RequestAddressR <$> do
-        matchSize 2 "decode(Request).RequestAddressR" len
-        RequestAddress . runIdentity <$> decodePortNumber
+      2 -> RequestAuthR <$> do
+        matchSize 2 "decode(Request).RequestAuthR" len
+        RequestAuth <$> decode
       n -> fail $ "decode(Request): invalid tag: " ++ show n
 
 ----------------------------------------
 
-data Response = ReturnPeersR !ReturnPeers
+data Response = ReturnNodesR !ReturnNodes
               | PongR !Pong
-              | AddressableAsR !AddressableAs
+              | AuthProofR !AuthProof
   deriving (Eq, Show)
 
-data ReturnPeers = ReturnPeers ![Peer]
+data ReturnNodes = ReturnNodes ![Node]
   deriving (Eq, Show)
 
 data Pong = Pong
   deriving (Eq, Show)
 
-data AddressableAs = AddressableAs !Peer
+data AuthProof = AuthProof !C.PublicKey !C.Signature
   deriving (Eq, Show)
 
 instance Serialise Response where
   encode = \case
-    ReturnPeersR (ReturnPeers peers)    -> encodeListLen 2 <> encodeWord 0 <> encode peers
-    PongR Pong                          -> encodeListLen 1 <> encodeWord 1
-    AddressableAsR (AddressableAs peer) -> encodeListLen 2 <> encodeWord 2 <> encode peer
+    ReturnNodesR (ReturnNodes peers) ->
+      encodeListLen 2 <> encodeWord 0 <> encode peers
+    PongR Pong ->
+      encodeListLen 1 <> encodeWord 1
+    AuthProofR (AuthProof pkey sig) ->
+         encodeListLen 3 <> encodeWord 2
+      <> encode (BA.convert pkey :: BS.ByteString)
+      <> encode (BA.convert sig  :: BS.ByteString)
   decode = do
     len <- decodeListLen
     decodeWord >>= \case
-      0 -> ReturnPeersR <$> do
-        matchSize 2 "decode(Response).ReturnPeersR" len
-        ReturnPeers <$> decode
+      0 -> ReturnNodesR <$> do
+        matchSize 2 "decode(Response).ReturnNodesR" len
+        ReturnNodes <$> decode
       1 -> PongR <$> do
         matchSize 1 "decode(Response).PongR" len
         pure Pong
-      2 -> AddressableAsR <$> do
-        matchSize 2 "decode(Response).AddressableAsR" len
-        AddressableAs <$> decode
+      2 -> AuthProofR <$> do
+        let label = "decode(Response).AuthProofR"
+        matchSize 3 label len
+        decodeBytes <&> C.publicKey >>= \case
+          C.CryptoFailed err  -> fail $ label ++ ": " ++ show err
+          C.CryptoPassed pkey -> decodeBytes <&> C.signature >>= \case
+            C.CryptoFailed err -> fail $ label ++ ": " ++ show err
+            C.CryptoPassed sig -> pure $ AuthProof pkey sig
       n -> fail $ "decode(Response): invalid tag: " ++ show n

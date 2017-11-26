@@ -16,7 +16,7 @@ import Network.PeerDiscovery.Util
 -- queue for further processing by 'dispatcher'.
 receiver :: Socket -> TBQueue (Peer, Signal) -> IO r
 receiver sock queue = forever $ do
-  (bytes, source) <- recvFrom sock 512
+  (bytes, source) <- recvFrom sock 4096
   case mkPeer source of
     Nothing -> putStrLn $ "receiver: couldn't construct Peer from " ++ show source
     Just peer -> case deserialiseOrFail' bytes of

@@ -9,6 +9,8 @@ module Network.PeerDiscovery.Util
   , withMVarP
   , modifyMVarP
   , modifyMVarP_
+  -- * Misc
+  , (<&>)
   ) where
 
 import Codec.CBOR.Decoding
@@ -60,3 +62,9 @@ modifyMVarP mv f = modifyMVar mv $ \v -> do
 -- | Strictly apply a pure function to contents of MVar.
 modifyMVarP_ :: MVar a -> (a -> a) -> IO ()
 modifyMVarP_ mv f = modifyMVar_ mv $ \v -> return $! f v
+
+----------------------------------------
+
+(<&>) :: Functor f => f a -> (a -> b) -> f b
+(<&>) = flip fmap
+infixl 1 <&>

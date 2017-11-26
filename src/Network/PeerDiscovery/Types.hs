@@ -16,9 +16,11 @@ module Network.PeerDiscovery.Types
   , RpcId
   , rpcIdBitSize
   , randomRpcId
+    -- * Nonce
+  , Nonce
+  , randomNonce
     -- * Node
   , Node(..)
-  , mkNode
     -- * RoutingTable
   , NodeInfo(..)
   , RoutingTable(..)
@@ -33,17 +35,17 @@ module Network.PeerDiscovery.Types
 import Codec.CBOR.Decoding
 import Codec.CBOR.Encoding
 import Codec.Serialise
-import Control.Arrow ((&&&))
 import Control.Concurrent
 import Data.Bits
 import Data.Functor.Identity
 import Data.List
 import Data.Monoid
 import Data.Typeable
-import Data.Word
 import Network.Socket
 import System.Random
 import qualified Crypto.Hash as H
+import qualified Crypto.PubKey.Ed25519 as C
+import qualified Crypto.Random as C
 import qualified Data.ByteArray as BA
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
@@ -88,15 +90,6 @@ instance Show Peer where
     where
       (b1, b2, b3, b4) = hostAddressToTuple peerAddress
 
-instance Serialise Peer where
-  encode Peer{..} = encodeListLen 2
-                 <> encode (htonl peerAddress)
-                 <> encodePortNumber (Identity peerPort)
-  decode = do
-    matchSize 2 "decode(Peer)" =<< decodeListLen
-    Peer <$> (ntohl <$> decode)
-         <*> (runIdentity <$> decodePortNumber)
-
 mkPeer :: SockAddr -> Maybe Peer
 mkPeer (SockAddrInet port host) = Just (Peer host port)
 mkPeer _                        = Nothing
@@ -109,7 +102,7 @@ peerIdBitSize = 224
 
 -- | PeerId is the peer identifier derivable from Peer, i.e. SHA224 of its data.
 newtype PeerId = PeerId Integer
-  deriving (Eq, Serialise)
+  deriving (Eq, Ord, Serialise)
 
 instance Show PeerId where
   show = (++ "...") . toBinary
@@ -121,21 +114,11 @@ instance Show PeerId where
           $ enumFromThenTo (peerIdBitSize - 1) (peerIdBitSize - 2) (peerIdBitSize - 16)
 
 -- | Construct 'PeerId' from 'Peer'.
-mkPeerId :: Peer -> PeerId
-mkPeerId Peer{..} = PeerId . mkInteger . H.hashWith H.SHA224
-                           $ BS.pack [a1, a2, a3, a4, p1, p2]
+mkPeerId :: C.PublicKey -> PeerId
+mkPeerId = PeerId . mkInteger . H.hashWith H.SHA224
   where
-    (a1, a2, a3, a4) = hostAddressToTuple peerAddress
-    (p1, p2) = (word8 &&& (word8 . (`shiftR` 8))) $ word16 peerPort
-
     mkInteger :: H.Digest H.SHA224 -> Integer
     mkInteger = foldl' (\acc w -> acc `shiftL` 8 + fromIntegral w) 0 . BA.unpack
-
-    word16 :: PortNumber -> Word16
-    word16 = fromIntegral
-
-    word8 :: Word16 -> Word8
-    word8 = fromIntegral
 
 -- | Generate random 'PeerId' using global 'StdGen'.
 randomPeerId :: IO PeerId
@@ -166,17 +149,35 @@ randomRpcId = RpcId <$> randomRIO (0, 2^rpcIdBitSize - 1)
 
 ----------------------------------------
 
+-- | Nonce used in authorization requests.
+newtype Nonce = Nonce BS.ByteString
+  deriving (Eq, Show, BA.ByteArrayAccess, Serialise)
+
+randomNonce :: IO Nonce
+randomNonce = Nonce <$> C.getRandomBytes 8
+
+----------------------------------------
+
 -- | 'Peer' along with its id.
 data Node = Node
-  { nodePeer         :: !Peer
-  , nodeId           :: !PeerId
+  { nodeId           :: !PeerId
+  , nodePeer         :: !Peer
   } deriving (Eq, Show)
 
--- | Costruct 'Node' from 'Peer'.
-mkNode :: Peer -> Node
-mkNode peer = Node { nodePeer = peer
-                   , nodeId   = mkPeerId peer
-                   }
+instance Serialise Node where
+  encode Node{..} = encodeListLen 3
+                 <> encode nodeId
+                 <> encode (htonl peerAddress)
+                 <> encodePortNumber (Identity peerPort)
+    where
+      Peer{..} = nodePeer
+
+  decode = do
+    matchSize 3 "decode(Node)" =<< decodeListLen
+    nodeId   <- decode
+    nodePeer <- Peer <$> (ntohl <$> decode)
+                     <*> (runIdentity <$> decodePortNumber)
+    pure Node{..}
 
 ----------------------------------------
 
@@ -188,7 +189,7 @@ data NodeInfo = NodeInfo
 
 -- | Routing table.
 data RoutingTable = RoutingTable
-  { rtMe     :: !(Maybe Node)
+  { rtId     :: !PeerId
   , rtTree   :: !RoutingTree
   } deriving (Eq, Show)
 
@@ -212,6 +213,9 @@ type ResponseHandlers = MVar (M.Map RpcId ResponseHandler)
 -- | Primary object of interest.
 data PeerDiscovery = PeerDiscovery
   { pdBindAddr         :: !Peer
+  , pdPublicPort       :: !(Maybe PortNumber)
+  , pdPublicKey        :: !C.PublicKey
+  , pdSecretKey        :: !C.SecretKey
   , pdSocket           :: !Socket
   , pdRoutingTable     :: !(MVar RoutingTable)
   , pdResponseHandlers :: !ResponseHandlers

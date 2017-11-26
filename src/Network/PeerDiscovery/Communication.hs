@@ -8,6 +8,7 @@ module Network.PeerDiscovery.Communication
 import Control.Concurrent
 import Control.Monad
 import Data.Typeable
+import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.Map.Strict as M
 
 import Network.PeerDiscovery.Communication.Types
@@ -19,17 +20,17 @@ class Typeable (ResponseType r) => IsRequest r where
   type ResponseType r :: *
   toRequest :: r -> Request
 
-instance IsRequest FindPeer where
-  type ResponseType FindPeer = ReturnPeers
-  toRequest = FindPeerR
+instance IsRequest FindNode where
+  type ResponseType FindNode = ReturnNodes
+  toRequest = FindNodeR
 
 instance IsRequest Ping where
   type ResponseType Ping = Pong
   toRequest = PingR
 
-instance IsRequest RequestAddress where
-  type ResponseType RequestAddress = AddressableAs
-  toRequest = RequestAddressR
+instance IsRequest RequestAuth where
+  type ResponseType RequestAuth = AuthProof
+  toRequest = RequestAuthR
 
 -- | Asynchronously send a request to a peer and perform specific actions on
 -- failure or response arrival. Note that there are multiple things that can go
@@ -93,28 +94,32 @@ sendRequest pd req peer onFailure onSuccess = do
 
 -- | Handle appropriate 'Request'.
 handleRequest :: PeerDiscovery -> Peer -> RpcId -> Request -> IO ()
-handleRequest pd@PeerDiscovery{..} peer rpcId rq = case rq of
-  FindPeerR (FindPeer mport peerId) -> do
+handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
+  FindNodeR (FindNode peerId mport targetId) -> do
     peers <- modifyMVarP pdRoutingTable $ \oldTable ->
-      let mpeer = (\port -> peer { peerPort = port }) <$> mport
+      let mnode = mport <&> \port -> Node { nodeId   = peerId
+                                          , nodePeer = peer { peerPort = port }
+                                          }
           -- If we got a port number, we assume that peer is globally reachable
           -- under its IP address and received port number, so we insert it into
           -- our routing table. In case it lied it's not a big deal, it will be
           -- evicted soon enough.
-          table = maybe oldTable (\p -> insertPeer pdConfig p oldTable) mpeer
-      in (table, findClosest (configK pdConfig) peerId table)
-    sendSignal pdSocket (Response rpcId $ ReturnPeersR (ReturnPeers peers)) peer
+          table = maybe oldTable (\p -> insertPeer pdConfig p oldTable) mnode
+      in (table, findClosest (configK pdConfig) targetId table)
+    sendSignal pdSocket (Response rpcId $ ReturnNodesR (ReturnNodes peers)) peer
   PingR Ping -> sendSignal pdSocket (Response rpcId (PongR Pong)) peer
-  RequestAddressR (RequestAddress port) -> do
-    -- A Peer wants to know whether he's globally reachable. We send him a
-    -- response containing his address we observed on the port he specified. He
-    -- will know whether he's reachable if the response gets through. Then we
-    -- send him Ping and if he responds, we know that he's globally reachable
-    -- and can add him to the routing table.
-    let dest = peer { peerPort = port }
-    sendSignal pdSocket (Response rpcId $ AddressableAsR (AddressableAs dest)) dest
-    sendRequest pd Ping dest (return ()) $ \Pong ->
-      modifyMVarP_ pdRoutingTable $ insertPeer pdConfig dest
+  RequestAuthR (RequestAuth nonce) -> do
+    -- We got authentication request. It usually happens when our ip or port has
+    -- changed, the sender has the old entry in his routing table and wants to
+    -- update it, but needs a confirmation that we are not trying to eclipse an
+    -- existing node. He sends us nonce, which we sign using our private key,
+    -- then send a response containing our public key and the signature we just
+    -- created. The sender can verify that the public key belongs to us as he
+    -- has our id (which is its hash) and that we possess the corresponding
+    -- private key by checking that signature is correct.
+    let signature = C.sign pdSecretKey pdPublicKey nonce
+        response  = AuthProofR (AuthProof pdPublicKey signature)
+    sendSignal pdSocket (Response rpcId response) peer
 
 -- | Handle 'Response' signals by looking up and running appropriate handler
 -- that was registered when a 'Request' was sent.
@@ -122,9 +127,9 @@ handleResponse :: ResponseHandlers -> Peer -> RpcId -> Response -> IO ()
 handleResponse responseHandlers peer rpcId rsp = retrieveHandler >>= \case
   Nothing      -> putStrLn $ "handleResponse: no handler for " ++ show rpcId
   Just handler -> case rsp of
-    ReturnPeersR returnPeers     -> runHandler handler returnPeers
-    PongR pong                   -> runHandler handler pong
-    AddressableAsR addressableAs -> runHandler handler addressableAs
+    ReturnNodesR returnPeers -> runHandler handler returnPeers
+    PongR pong               -> runHandler handler pong
+    AuthProofR authProof     -> runHandler handler authProof
   where
     retrieveHandler = modifyMVarP responseHandlers $ \handlers ->
       case M.lookup rpcId handlers of

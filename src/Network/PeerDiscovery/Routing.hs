@@ -5,24 +5,21 @@ module Network.PeerDiscovery.Routing
   , findClosest
   ) where
 
-import Data.Maybe
 import qualified Data.Foldable as F
 import qualified Data.Sequence as S
 
 import Network.PeerDiscovery.Types
 
-initRoutingTable :: Maybe Peer -> RoutingTable
-initRoutingTable mpeer =
-  RoutingTable { rtMe = mkNode <$> mpeer
+initRoutingTable :: PeerId -> RoutingTable
+initRoutingTable peerId =
+  RoutingTable { rtId   = peerId
                , rtTree = Bucket S.empty
                }
 
-insertPeer :: Config -> Peer -> RoutingTable -> RoutingTable
-insertPeer conf peer rt = rt { rtTree = go (isJust myId) 0 (rtTree rt) }
+insertPeer :: Config -> Node -> RoutingTable -> RoutingTable
+insertPeer conf peer rt = rt { rtTree = go True 0 (rtTree rt) }
   where
-    myId = nodeId <$> rtMe rt
-
-    node = NodeInfo { niNode         = mkNode peer
+    node = NodeInfo { niNode         = peer
                     , niTimeoutCount = 0
                     }
 
@@ -32,8 +29,10 @@ insertPeer conf peer rt = rt { rtTree = go (isJust myId) 0 (rtTree rt) }
         | S.length nodes < configK conf ->
           -- Check if a node is already there and if so, update its last seen
           -- field, reset its timeout count and put it at the head of the
-          -- list. If it's not, simply insert it at the head.
-          case S.findIndexL ((== peer) . nodePeer . niNode) nodes of
+          -- list. If it's not, simply insert it at the head. TODO: Request
+          -- authentication if a node with the same identifier, but different
+          -- Peer exists.
+          case S.findIndexL ((== nodeId peer) . nodeId . niNode) nodes of
             Just nodeIdx -> Bucket $ node S.<| S.deleteAt nodeIdx nodes
             Nothing      -> Bucket $ node S.<|                    nodes
         | myBranch || depth < configB conf ->
@@ -55,9 +54,8 @@ insertPeer conf peer rt = rt { rtTree = go (isJust myId) 0 (rtTree rt) }
             Just nodeIdx -> Bucket $ node S.<| S.deleteAt nodeIdx nodes
             Nothing      -> tree
       Split left right ->
-        let peerBit      = testPeerIdBit (nodeId $ niNode node) depth
-            -- If there is no id, use error as && will not reach it.
-            myBit        = maybe (error "insertPeer") (`testPeerIdBit` depth) myId
+        let peerBit = testPeerIdBit (nodeId $ niNode node) depth
+            myBit   = testPeerIdBit (rtId rt) depth
             -- Check whether the branch we're going to extends our id prefix.
             nextMyBranch = myBranch && myBit == peerBit
         in if peerBit
@@ -65,27 +63,24 @@ insertPeer conf peer rt = rt { rtTree = go (isJust myId) 0 (rtTree rt) }
         else Split left (go nextMyBranch (depth + 1) right)
 
 -- | Increase the count of timeouts of a given peer by 1.
-timeoutPeer :: Peer -> RoutingTable -> RoutingTable
+timeoutPeer :: Node -> RoutingTable -> RoutingTable
 timeoutPeer peer rt = rt { rtTree = go 0 (rtTree rt) }
   where
-    nid = mkPeerId peer
-
     go !depth = \case
       tree@(Bucket nodes) ->
-        case S.findIndexR ((== peer) . nodePeer . niNode) nodes of
+        case S.findIndexR ((== peer) . niNode) nodes of
           Just nodeIdx ->
             let f node = node { niTimeoutCount = niTimeoutCount node + 1 }
             in Bucket $ S.adjust' f nodeIdx nodes
           Nothing -> tree
       Split left right ->
-        if testPeerIdBit nid depth
+        if testPeerIdBit (nodeId peer) depth
         then Split (go (depth + 1) left) right
         else Split left (go (depth + 1) right)
 
 -- | Return up to k peers closest to the target id.
-findClosest :: Int -> PeerId -> RoutingTable -> [Peer]
-findClosest n nid = F.foldr (\node acc -> nodePeer (niNode node) : acc) []
-                  . go n 0 . rtTree
+findClosest :: Int -> PeerId -> RoutingTable -> [Node]
+findClosest n nid = F.foldr (\node acc -> niNode node : acc) [] . go n 0 . rtTree
   where
     go k !depth = \case
       Bucket nodes     -> S.take k nodes

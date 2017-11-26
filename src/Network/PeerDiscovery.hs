@@ -7,6 +7,7 @@ import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Exception
 import Network.Socket
+import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.Map.Strict as M
 
 import Network.PeerDiscovery.Routing
@@ -16,13 +17,17 @@ import Network.PeerDiscovery.Workers
 -- | Start peer discovery instance.
 withPeerDiscovery
   :: Config
+  -> Bool
   -> Maybe HostName
   -> PortNumber
   -> (PeerDiscovery -> IO r)
   -> IO r
-withPeerDiscovery pdConfig mhost port k = do
+withPeerDiscovery pdConfig joinNetwork mhost port k = do
   signalQueue        <- newTBQueueIO $ configSignalQueueSize pdConfig
-  pdRoutingTable     <- newMVar (initRoutingTable Nothing)
+  pdSecretKey        <- C.generateSecretKey
+  let pdPublicKey    = C.toPublic pdSecretKey
+      pdPublicPort   = if joinNetwork then Just port else Nothing
+  pdRoutingTable     <- newMVar . initRoutingTable $ mkPeerId pdPublicKey
   pdResponseHandlers <- newMVar M.empty
   withUdpSocket $ \pdBindAddr pdSocket -> let pd = PeerDiscovery{..} in do
     withAsync (receiver pdSocket signalQueue) $ \_ -> do
