@@ -17,7 +17,11 @@ initRoutingTable peerId =
                }
 
 insertPeer :: Config -> Node -> RoutingTable -> RoutingTable
-insertPeer conf peer rt = rt { rtTree = go True 0 (rtTree rt) }
+insertPeer conf peer rt =
+  -- We don't want ourselves in the routing table, because we are not interested in "discovering" and talking to ourselves.
+  if nodeId peer /= rtId rt
+  then rt { rtTree = go True 0 (rtTree rt) }
+  else rt
   where
     node = NodeInfo { niNode         = peer
                     , niTimeoutCount = 0

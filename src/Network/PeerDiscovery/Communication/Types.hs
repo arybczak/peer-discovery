@@ -43,8 +43,6 @@ instance Serialise Signal where
 
 sendSignal :: Socket -> Signal -> Peer -> IO ()
 sendSignal sock signal Peer{..} = do
-  let sig = serialise' signal
-  putStrLn $ "Sending " ++ show (BS.length sig) ++ " bytes"
   void $ sendTo sock (serialise' signal) (SockAddrInet peerPort peerAddress)
 
 ----------------------------------------

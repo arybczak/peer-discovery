@@ -104,7 +104,7 @@ handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
           -- under its IP address and received port number, so we insert it into
           -- our routing table. In case it lied it's not a big deal, it will be
           -- evicted soon enough.
-          table = maybe oldTable (\p -> insertPeer pdConfig p oldTable) mnode
+          table = maybe oldTable (\node -> insertPeer pdConfig node oldTable) mnode
       in (table, findClosest (configK pdConfig) targetId table)
     sendSignal pdSocket (Response rpcId $ ReturnNodesR (ReturnNodes peers)) peer
   PingR Ping -> sendSignal pdSocket (Response rpcId (PongR Pong)) peer

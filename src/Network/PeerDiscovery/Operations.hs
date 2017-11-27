@@ -56,7 +56,11 @@ peerLookup pd@PeerDiscovery{..} targetId = do
   closest <- withMVarP pdRoutingTable $ M.fromList
                                       . map (distance targetId . nodeId &&& id)
                                       . findClosest (configK pdConfig) targetId
-  outerLoop queue closest M.empty S.empty
+  -- Put ourselves in the initial set of failed peers to avoid contacting
+  -- ourselves during lookup as there is no point, we already picked the best
+  -- peers we had in the routing table.
+  failed <- withMVarP pdRoutingTable (S.singleton . rtId)
+  outerLoop queue closest M.empty failed
   where
     outerLoop
       :: TQueue Reply
