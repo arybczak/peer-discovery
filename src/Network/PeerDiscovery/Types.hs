@@ -38,11 +38,9 @@ import Codec.Serialise
 import Control.Concurrent
 import Data.Bits
 import Data.Functor.Identity
-import Data.List
 import Data.Monoid
 import Data.Typeable
 import Network.Socket
-import System.Random
 import qualified Crypto.Hash as H
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Crypto.Random as C
@@ -96,7 +94,7 @@ mkPeer _                        = Nothing
 
 ----------------------------------------
 
--- Size of PeerId in bits.
+-- Size of PeerId in bits (224).
 peerIdBitSize :: Int
 peerIdBitSize = 224
 
@@ -115,14 +113,11 @@ instance Show PeerId where
 
 -- | Construct 'PeerId' from 'Peer'.
 mkPeerId :: C.PublicKey -> PeerId
-mkPeerId = PeerId . mkInteger . H.hashWith H.SHA224
-  where
-    mkInteger :: H.Digest H.SHA224 -> Integer
-    mkInteger = foldl' (\acc w -> acc `shiftL` 8 + fromIntegral w) 0 . BA.unpack
+mkPeerId = PeerId . mkInteger . BA.convert . H.hashWith H.SHA224
 
--- | Generate random 'PeerId' using global 'StdGen'.
+-- | Generate random 'PeerId' using cryptographically secure RNG.
 randomPeerId :: IO PeerId
-randomPeerId = PeerId <$> randomRIO (0, 2^peerIdBitSize - 1)
+randomPeerId = PeerId . mkInteger <$> C.getRandomBytes (peerIdBitSize `quot` 8)
 
 -- | Test whether a specific bit of 'PeerId' is set.
 testPeerIdBit :: PeerId -> Int -> Bool
@@ -134,7 +129,7 @@ distance (PeerId a) (PeerId b) = a `xor` b
 
 ----------------------------------------
 
--- | Size of RpcId in bits.
+-- | Size of RpcId in bits (160).
 rpcIdBitSize :: Int
 rpcIdBitSize = 160
 
@@ -143,9 +138,9 @@ rpcIdBitSize = 160
 newtype RpcId = RpcId Integer
   deriving (Eq, Ord, Show, Serialise)
 
--- | Generate random 'RpcId' using global 'StdGen'
+-- | Generate random 'RpcId' using cryptographically secure RNG.
 randomRpcId :: IO RpcId
-randomRpcId = RpcId <$> randomRIO (0, 2^rpcIdBitSize - 1)
+randomRpcId = RpcId . mkInteger <$> C.getRandomBytes (rpcIdBitSize `quot` 8)
 
 ----------------------------------------
 

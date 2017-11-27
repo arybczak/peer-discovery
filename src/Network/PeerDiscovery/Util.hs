@@ -10,6 +10,7 @@ module Network.PeerDiscovery.Util
   , modifyMVarP
   , modifyMVarP_
   -- * Misc
+  , mkInteger
   , (<&>)
   ) where
 
@@ -18,6 +19,7 @@ import Codec.CBOR.Encoding
 import Codec.Serialise
 import Control.Concurrent
 import Control.Monad
+import Data.Bits
 import Data.Word
 import Network.Socket
 import qualified Data.ByteString as BS
@@ -64,6 +66,11 @@ modifyMVarP_ :: MVar a -> (a -> a) -> IO ()
 modifyMVarP_ mv f = modifyMVar_ mv $ \v -> return $! f v
 
 ----------------------------------------
+
+-- | Convert an Integer into a ByteString by interpreting it as its big endian
+-- representation.
+mkInteger :: BS.ByteString -> Integer
+mkInteger = BS.foldl' (\acc w -> acc `shiftL` 8 + fromIntegral w) 0
 
 (<&>) :: Functor f => f a -> (a -> b) -> f b
 (<&>) = flip fmap
