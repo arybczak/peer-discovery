@@ -13,9 +13,7 @@ import Network.PeerDiscovery.Types
 --
 -- TODO:
 --
--- - Thread for periodically refreshing routing table (calling peer lookup) and
---   requesting address every N lookups to check whether routing table needs to
---   be rebuilt in case our address changed.
+-- - Thread for periodically refreshing routing table (calling peer lookup)
 --
 -- - Replacement cache in the routing table.
 --
@@ -49,25 +47,21 @@ import Network.PeerDiscovery.Types
 -- the case, we return both for a certain bucket, prioritizing IPv6 peers over
 -- IPv4 ones.
 --
--- PROBLEM: requestAddress will return either our IPv4 address or IPv6.
---
 -- IPv4 - we bind to IPv4 socket and store only IPv4 addresses in the routing
 -- table (we keep empty buckets of IPv6 addresses for compatibility with IPv6
 -- mode). A flag sent along with incoming FindNode requests about returning only
 -- IPv6 hosts is ignored.
 --
--- 2. Node id is required for the routing table - when we bootstrap, we need to
--- request from the first node we're contacting to send us our address as it
--- sees it. If we get the message on the given port, we're addressable and we
--- know of our id.
+-- 2. We should support persistent key pairs. This way, for "central" instances
+-- new nodes will boostrap their instances with, we can publish their key
+-- fingerprints along with ip addresses / domain names, so that when we
+-- bootstrap, we can use them to verify the authenticity of hosts we connect to.
 --
--- 3. Since we derive id from address info, we need to handle the situation in
--- which our address changes - we need to periodically request our address info
--- from nodes and if it differs from the one we know of, we rebuild our routing
--- table.
---
--- 4. No need to worry about splitting data into multiple packets - as we don't
--- send ids, we can pack a list of 50 CBOR encoded node addresses in 500 bytes.
+-- 4. No need to worry about splitting data into multiple packets - for bucket
+-- size of 10 ReturnNodes message takes less than 500 bytes. If we want to use
+-- larger bucket size (which most likely is not needed as bucket size represents
+-- redundancy and 10 is fine) it's fine up to 35 (~1430 bytes, Ethernet MTU is
+-- 1500, 1472 for IPv4 and 1452 for IPv6 without appropriate headers).
 
 -- | Start multiple peer discovery instances.
 withPeerDiscoveries
