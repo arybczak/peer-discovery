@@ -16,15 +16,19 @@ import Network.PeerDiscovery.Workers
 
 -- | Start peer discovery instance.
 withPeerDiscovery
-  :: Config
-  -> Bool
-  -> Maybe HostName
-  -> PortNumber
+  :: Config            -- ^ Instance configuration parameters.
+  -> Bool              -- ^ Specify whether you want to join the network. If you
+                       -- are behind NAT, you need to make sure that you are
+                       -- reachable on the port specified below.
+  -> Maybe C.SecretKey -- ^ Secret key for the instance. If none is given,
+                       -- freshly generated key will be used.
+  -> Maybe HostName    -- ^ Host name to bind to, if applicable.
+  -> PortNumber        -- ^ Port number to bind to.
   -> (PeerDiscovery -> IO r)
   -> IO r
-withPeerDiscovery pdConfig joinNetwork mhost port k = do
+withPeerDiscovery pdConfig joinNetwork mskey mhost port k = do
   signalQueue        <- newTBQueueIO $ configSignalQueueSize pdConfig
-  pdSecretKey        <- C.generateSecretKey
+  pdSecretKey        <- maybe C.generateSecretKey pure mskey
   let pdPublicKey    = C.toPublic pdSecretKey
       pdPublicPort   = if joinNetwork then Just port else Nothing
   pdRoutingTable     <- newMVar . initRoutingTable $ mkPeerId pdPublicKey

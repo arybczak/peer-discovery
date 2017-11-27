@@ -55,9 +55,12 @@ executable peer-discovery-test
   main-is:             Main.hs
 
   build-depends:       base < 5,
+                       bytestring,
+                       cryptonite,
                        peer-discovery,
                        network,
-                       pretty-simple
+                       pretty-simple,
+                       random
 
   ghc-options:         -Wall -threaded -rtsopts "-with-rtsopts=-A2m -N2"
 

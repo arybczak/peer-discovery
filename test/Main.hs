@@ -4,6 +4,10 @@ import Control.Concurrent
 import Control.Monad
 import Network.Socket
 import Text.Pretty.Simple
+import System.Random
+import qualified Data.ByteString as BS
+import qualified Crypto.Error as C
+import qualified Crypto.PubKey.Ed25519 as C
 
 import Network.PeerDiscovery
 import Network.PeerDiscovery.Operations
@@ -74,7 +78,9 @@ withPeerDiscoveries conf connInfos k = go [] connInfos
     go acc = \case
       []                                -> k (reverse acc)
       ((joinNetwork, mhost, port):rest) -> do
-        withPeerDiscovery conf joinNetwork mhost port $ \pd ->
+        let C.CryptoPassed skey = C.secretKey . BS.pack . take C.secretKeySize
+                                . randoms . mkStdGen $ fromIntegral port
+        withPeerDiscovery conf joinNetwork (Just skey) mhost port $ \pd ->
           go (pd : acc) rest
 
 main :: IO ()
