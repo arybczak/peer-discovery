@@ -2,6 +2,7 @@ module Network.PeerDiscovery.Routing
   ( initRoutingTable
   , insertPeer
   , timeoutPeer
+  , clearTimeoutPeer
   , findClosest
   ) where
 
@@ -66,21 +67,13 @@ insertPeer conf peer rt =
         then Split (go nextMyBranch (depth + 1) left) right
         else Split left (go nextMyBranch (depth + 1) right)
 
--- | Increase the count of timeouts of a given peer by 1.
+-- | Increase the timeout count of a given peer by 1.
 timeoutPeer :: Node -> RoutingTable -> RoutingTable
-timeoutPeer peer rt = rt { rtTree = go 0 (rtTree rt) }
-  where
-    go !depth = \case
-      tree@(Bucket nodes) ->
-        case S.findIndexR ((== peer) . niNode) nodes of
-          Just nodeIdx ->
-            let f node = node { niTimeoutCount = niTimeoutCount node + 1 }
-            in Bucket $ S.adjust' f nodeIdx nodes
-          Nothing -> tree
-      Split left right ->
-        if testPeerIdBit (nodeId peer) depth
-        then Split (go (depth + 1) left) right
-        else Split left (go (depth + 1) right)
+timeoutPeer = modifyTimeoutCount (+1)
+
+-- | Reset the timeout count of a given peer.
+clearTimeoutPeer :: Node -> RoutingTable -> RoutingTable
+clearTimeoutPeer = modifyTimeoutCount (const 0)
 
 -- | Return up to k peers closest to the target id.
 findClosest :: Int -> PeerId -> RoutingTable -> [Node]
@@ -101,3 +94,20 @@ findClosest n nid = F.foldr (\node acc -> niNode node : acc) [] . go n 0 . rtTre
                     if bitSet
                     then nodes S.>< go missing (depth + 1) right
                     else nodes S.>< go missing (depth + 1) left
+
+----------------------------------------
+
+modifyTimeoutCount :: (Int -> Int) -> Node -> RoutingTable -> RoutingTable
+modifyTimeoutCount modify peer rt = rt { rtTree = go 0 (rtTree rt) }
+  where
+    go !depth = \case
+      tree@(Bucket nodes) ->
+        case S.findIndexR ((== peer) . niNode) nodes of
+          Just nodeIdx ->
+            let f node = node { niTimeoutCount = modify (niTimeoutCount node) }
+            in Bucket $ S.adjust' f nodeIdx nodes
+          Nothing -> tree
+      Split left right ->
+        if testPeerIdBit (nodeId peer) depth
+        then Split (go (depth + 1) left) right
+        else Split left (go (depth + 1) right)

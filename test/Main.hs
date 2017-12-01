@@ -85,7 +85,7 @@ withPeerDiscoveries conf connInfos k = go [] connInfos
 
 main :: IO ()
 main = do
-  let connInfos = map (True, Just "127.0.0.1", ) [3000..3200]
+  let connInfos = map (True, Just "127.0.0.1", ) [3000..3500]
   withPeerDiscoveries defaultConfig connInfos $ \pds -> do
 
     let nodes = let xs = map (\pd -> Node { nodeId = mkPeerId $ pdPublicKey pd
@@ -97,8 +97,11 @@ main = do
                   bootstrap pd node
               ) pds nodes
 
+    forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
+    --forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
+
     let pd1 = head pds
-        pd2 = pds !! 100
+        pd2 = pds !! 250
     pPrint =<< readMVar (pdRoutingTable pd1)
     let targetId = mkPeerId $ pdPublicKey pd2
     pPrint . map (\x -> let d = distance targetId (nodeId x) in (length (show d), d, x))

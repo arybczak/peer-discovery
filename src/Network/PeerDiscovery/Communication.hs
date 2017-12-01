@@ -104,7 +104,21 @@ handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
           -- under its IP address and received port number, so we insert it into
           -- our routing table. In case it lied it's not a big deal, it will be
           -- evicted soon enough.
-          table = maybe oldTable (\node -> insertPeer pdConfig node oldTable) mnode
+          table =
+            -- If it comes to nodes who send us requests, we only insert them
+            -- into the table if the highest bit of their id is different than
+            -- ours. This way an adversary:
+            --
+            -- 1) Can't directly influence our neighbourhood by flooding us with
+            -- reqeusts from nodes that are close to us.
+            --
+            -- 2) Will have a hard time getting a large influence in our routing
+            -- table because the branch representing different highest bit
+            -- accounts for half of the network, so its buckets will most likely
+            -- be full.
+            if peerId `distance` rtId oldTable < 2^(peerIdBitSize - 1)
+            then maybe oldTable (\node -> clearTimeoutPeer node oldTable)    mnode
+            else maybe oldTable (\node -> insertPeer pdConfig node oldTable) mnode
       in (table, findClosest (configK pdConfig) targetId table)
     sendSignal pdSocket (Response rpcId $ ReturnNodesR (ReturnNodes peers)) peer
   PingR Ping -> sendSignal pdSocket (Response rpcId (PongR Pong)) peer

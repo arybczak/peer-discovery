@@ -30,7 +30,7 @@ library
                        cryptonite >= 0.24,
                        memory,
                        network,
-                       random,
+                       random-shuffle,
                        serialise,
                        stm
 
@@ -62,7 +62,7 @@ executable peer-discovery-test
                        pretty-simple,
                        random
 
-  ghc-options:         -Wall -threaded -rtsopts "-with-rtsopts=-A2m -N2"
+  ghc-options:         -Wall -threaded -rtsopts "-with-rtsopts=-A2m -N4"
 
   hs-source-dirs:      test
   default-language:    Haskell2010

@@ -10,6 +10,7 @@ module Network.PeerDiscovery.Util
   , modifyMVarP
   , modifyMVarP_
   -- * Misc
+  , randomPartition
   , mkInteger
   , (<&>)
   ) where
@@ -22,8 +23,10 @@ import Control.Monad
 import Data.Bits
 import Data.Word
 import Network.Socket
+import System.Random.Shuffle
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
+import qualified Data.Map.Strict as M
 
 -- | Strict version of 'serialise'.
 serialise' :: Serialise a => a -> BS.ByteString
@@ -66,6 +69,11 @@ modifyMVarP_ :: MVar a -> (a -> a) -> IO ()
 modifyMVarP_ mv f = modifyMVar_ mv $ \v -> return $! f v
 
 ----------------------------------------
+
+-- | Randomly partition a list into N sublists of similar size.
+randomPartition :: Int -> [a] -> IO [[a]]
+randomPartition n xs = shuffleM (take (length xs) $ cycle [1..n])
+  <&> M.elems . M.fromListWith (++) . (`zip` map pure xs)
 
 -- | Convert an Integer into a ByteString by interpreting it as its big endian
 -- representation.

@@ -54,6 +54,7 @@ import Network.PeerDiscovery.Util
 data Config = Config
   { configAlpha             :: !Int -- ^ Concurrency parameter.
   , configK                 :: !Int -- ^ Bucket size.
+  , configD                 :: !Int -- ^ Number of distinct lookup paths.
   , configB                 :: !Int -- ^ Maximum depth of the routing tree.
   , configMaxTimeouts       :: !Int -- ^ Number of acceptable timeouts before
                                     --   eviction from the routing tree.
@@ -64,7 +65,8 @@ data Config = Config
 defaultConfig :: Config
 defaultConfig = Config
   { configAlpha             = 3
-  , configK                 = 10
+  , configK                 = 16
+  , configD                 = 8
   , configB                 = 5
   , configMaxTimeouts       = 3
   , configResponseTimeout   = 500000
@@ -157,7 +159,7 @@ randomNonce = Nonce <$> C.getRandomBytes 8
 data Node = Node
   { nodeId           :: !PeerId
   , nodePeer         :: !Peer
-  } deriving (Eq, Show)
+  } deriving (Eq, Ord, Show)
 
 instance Serialise Node where
   encode Node{..} = encodeListLen 3

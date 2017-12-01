@@ -4,6 +4,7 @@ module Network.PeerDiscovery.Operations
   ) where
 
 import Control.Arrow ((&&&))
+import Control.Concurrent.Async
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Monad
@@ -44,63 +45,81 @@ bootstrap pd node = do
 ----------------------------------------
 
 -- | Post-processed response of a 'FindNode' request.
-data Reply = Success !Integer !Node !ReturnNodes
+data Reply = Success !Node !ReturnNodes
            | Failure !Integer !Node
 
 -- | Perform Kademlia peer lookup operation and return up to k live peers
 -- closest to a target id.
 peerLookup :: PeerDiscovery -> PeerId -> IO [Node]
 peerLookup pd@PeerDiscovery{..} targetId = do
-  queue <- newTQueueIO
   -- We start by taking k peers closest to the target from our routing table.
-  closest <- withMVarP pdRoutingTable $ M.fromList
-                                      . map (distance targetId . nodeId &&& id)
+  closest <- withMVarP pdRoutingTable $ map (distance targetId . nodeId &&& id)
                                       . findClosest (configK pdConfig) targetId
   -- Put ourselves in the initial set of failed peers to avoid contacting
   -- ourselves during lookup as there is no point, we already picked the best
   -- peers we had in the routing table.
   failed <- withMVarP pdRoutingTable (S.singleton . rtId)
-  outerLoop queue closest M.empty failed
+
+  -- We partition k initial peers into (at most) d buckets of similar size to
+  -- perform d independent lookups with disjoin routing paths to make it hard
+  -- for an adversary to reroute us into the part of network he controls.
+  buckets <- randomPartition (configD pdConfig) closest
+  let !bucketsLen = length buckets
+  -- We share the list of nodes we query to make routing paths disjoint.
+  queried <- newMVar M.empty
+  -- Perform up to d lookups in parallel.
+  results <- forConcurrently buckets $ \bucket -> do
+    queue <- newTQueueIO
+    outerLoop queue (M.fromList bucket) queried failed
+
+  return . map fst . take (configK pdConfig)
+         -- Consider only nodes that were returned by the majority of lookups.
+         . filter ((> bucketsLen `quot` 2) . snd)
+         -- Count the number of lookups that returned a specific node.
+         . M.toList . M.fromListWith (+) . map (, 1::Int)
+         $ concat results
   where
     outerLoop
       :: TQueue Reply
       -> M.Map Integer Node
-      -> M.Map Integer Node
+      -> MVar (M.Map Integer Node)
       -> S.Set PeerId
       -> IO [Node]
-    outerLoop queue closest visited failed = do
-      -- We select alpha peers from the k closest ones we didn't yet visit.
-      let chosen = peersToQuery (configAlpha pdConfig) closest visited
+    outerLoop queue closest queried failed = do
+      -- We select alpha peers from the k closest ones we didn't yet query.
+      chosen <- peersToQuery queried (configAlpha pdConfig) closest
       if null chosen
         -- If there isn't anyone left to query, the lookup is done.
         then return . M.elems $ M.take (configK pdConfig) closest
         else do
           sendFindNodeRequests queue chosen
           -- Process responses from chosen peers and update the list of closest
-          -- and visited peers accordingly.
-          (newClosest, newVisited, newFailed) <-
-            processResponses queue (length chosen) closest visited failed
+          -- and queried peers accordingly.
+          (newClosest, newFailed) <-
+            processResponses queue queried (length chosen) closest failed
 
           -- We returned from processResponses which indicates that the closest
           -- peer didn't change (as if it did, we would send more FindNode
           -- requests), so now we send FindNode requests to all of the k closest
           -- peers we didn't yet query.
-          let rest = peersToQuery (configK pdConfig) newClosest newVisited
+          rest <- peersToQuery queried (configK pdConfig) newClosest
           sendFindNodeRequests queue rest
-          (newerClosest, newerVisited, newerFailed) <-
-            processResponses queue (length rest) newClosest newVisited newFailed
+          (newerClosest, newerFailed) <-
+            processResponses queue queried (length rest) newClosest newFailed
 
-          outerLoop queue newerClosest newerVisited newerFailed
+          outerLoop queue newerClosest queried newerFailed
 
     -- Select a number of chosen peers from the k closest ones we didn't yet
-    -- query to send them FindNode requests.
+    -- query to send them FindNode requests and mark them as queried so parallel
+    -- lookups will not select them as we want routing paths to be disjoint.
     peersToQuery
-      :: Int
+      :: MVar (M.Map Integer Node)
+      -> Int
       -> M.Map Integer Node
-      -> M.Map Integer Node
-      -> [(Integer, Node)]
-    peersToQuery n closest visited =
-      M.toList . M.take n $ (M.take (configK pdConfig) closest) M.\\ visited
+      -> IO ([(Integer, Node)])
+    peersToQuery mvQueried n closest = modifyMVarP mvQueried $ \queried ->
+      let chosen = M.take n $ (M.take (configK pdConfig) closest) M.\\ queried
+      in (queried `M.union` chosen, M.toList chosen)
 
     -- Asynchronously send FindNode requests to multiple peers and put the
     -- responses in a queue so we can synchronously process them as they come.
@@ -113,33 +132,32 @@ peerLookup pd@PeerDiscovery{..} targetId = do
       forM_ peers $ \(targetDist, peer) -> do
         sendRequest pd (FindNode myId pdPublicPort targetId) (nodePeer peer)
           (atomically . writeTQueue queue $ Failure targetDist peer)
-          (atomically . writeTQueue queue . Success targetDist peer)
+          (atomically . writeTQueue queue . Success peer)
 
     processResponses
       :: TQueue Reply
+      -> MVar (M.Map Integer Node)
       -> Int
       -> M.Map Integer Node
-      -> M.Map Integer Node
       -> S.Set PeerId
-      -> IO (M.Map Integer Node, M.Map Integer Node, S.Set PeerId)
-    processResponses queue = innerLoop
+      -> IO (M.Map Integer Node, S.Set PeerId)
+    processResponses queue queried = innerLoop
       where
         innerLoop
           :: Int
           -> M.Map Integer Node
-          -> M.Map Integer Node
           -> S.Set PeerId
-          -> IO (M.Map Integer Node, M.Map Integer Node, S.Set PeerId)
-        innerLoop pending closest visited failed = case pending of
+          -> IO (M.Map Integer Node, S.Set PeerId)
+        innerLoop pending closest failed = case pending of
           -- If there are no more pending replies, we completed the round.
-          0 -> return (closest, visited, failed)
+          0 -> return (closest, failed)
           _ -> do
             reply <- atomically (readTQueue queue)
             case reply of
               -- We got the list of peers from the recipient. Put the recipient
               -- into the routing table, update our list of peers closest to the
-              -- target and mark the peer as visited.
-              Success targetDist peer (ReturnNodes peers) -> do
+              -- target and mark the peer as queried.
+              Success peer (ReturnNodes peers) -> do
                 modifyMVarP_ pdRoutingTable $ insertPeer pdConfig peer
                 let newClosest = updateClosestWith failed closest peers
 
@@ -150,12 +168,11 @@ peerLookup pd@PeerDiscovery{..} targetId = do
                 newPending <- case M.findMin closest == M.findMin newClosest of
                   True  -> return $ pending - 1
                   False -> do
-                    let chosen = peersToQuery (configAlpha pdConfig) closest visited
+                    chosen <- peersToQuery queried (configAlpha pdConfig) closest
                     sendFindNodeRequests queue chosen
                     return $ pending + length chosen - 1
 
-                innerLoop newPending newClosest (M.insert targetDist peer visited)
-                                                failed
+                innerLoop newPending newClosest failed
 
               -- If FindNode request failed, remove the recipient from the list
               -- of closest peers and mark it as failed so that we won't add it
@@ -164,14 +181,14 @@ peerLookup pd@PeerDiscovery{..} targetId = do
               Failure targetDist peer -> do
                 modifyMVarP_ pdRoutingTable $ timeoutPeer peer
                 innerLoop (pending - 1) (M.delete targetDist closest)
-                          visited (S.insert (nodeId peer) failed)
+                          (S.insert (nodeId peer) failed)
 
         updateClosestWith
           :: S.Set PeerId
           -> M.Map Integer Node
           -> [Node]
           -> M.Map Integer Node
-        updateClosestWith failed peers =
+        updateClosestWith failed closest =
           -- We need to keep more than k peers on the list. If we keep k, then
           -- the following might happen: we're in the middle of the lookup, we
           -- send queries to alpha closest peers. We get the responses, closest
@@ -183,7 +200,7 @@ peerLookup pd@PeerDiscovery{..} targetId = do
           -- next round to fill the gap, but now we don't have anyone left to
           -- query (because we just did) and we also have less than k closest
           -- peers.
-          M.take ((configAlpha pdConfig + 1) * configK pdConfig) . foldr f peers
+          M.take ((configAlpha pdConfig + 1) * configK pdConfig) . foldr f closest
           where
             f peer acc =
               -- If a peer failed to return a response during lookup at any
