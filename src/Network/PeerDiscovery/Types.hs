@@ -17,9 +17,6 @@ module Network.PeerDiscovery.Types
   , rpcIdBitSize
   , fromRpcId
   , randomRpcId
-    -- * Nonce
-  , Nonce
-  , randomNonce
     -- * Node
   , Node(..)
     -- * RoutingTable
@@ -30,12 +27,10 @@ module Network.PeerDiscovery.Types
   , Request(..)
   , FindNode(..)
   , Ping(..)
-  , RequestAuth(..)
     -- * Response
   , Response(..)
   , ReturnNodes(..)
   , Pong(..)
-  , AuthProof(..)
     -- * ResponseHandler
   , ResponseHandler(..)
   , ResponseHandlers
@@ -161,15 +156,6 @@ randomRpcId = RpcId <$> C.getRandomBytes (rpcIdBitSize `quot` 8)
 
 ----------------------------------------
 
--- | Nonce used in authorization requests.
-newtype Nonce = Nonce BS.ByteString
-  deriving (Eq, Show, BA.ByteArrayAccess, Serialise)
-
-randomNonce :: IO Nonce
-randomNonce = Nonce <$> C.getRandomBytes 8
-
-----------------------------------------
-
 -- | 'Peer' along with its id.
 data Node = Node
   { nodeId           :: !PeerId
@@ -213,16 +199,12 @@ data RoutingTree = Bucket !(S.Seq NodeInfo)
 
 data Request = FindNodeR !FindNode
              | PingR !Ping
-             | RequestAuthR !RequestAuth
   deriving (Eq, Show)
 
 data FindNode = FindNode !PeerId !(Maybe PortNumber) !PeerId
   deriving (Eq, Show)
 
 data Ping = Ping
-  deriving (Eq, Show)
-
-data RequestAuth = RequestAuth !Nonce
   deriving (Eq, Show)
 
 instance Serialise Request where
@@ -232,8 +214,6 @@ instance Serialise Request where
       <> encode peerId <> encodePortNumber mport <> encode targetId
     PingR Ping ->
       encodeListLen 1 <> encodeWord 1
-    RequestAuthR (RequestAuth nonce) ->
-      encodeListLen 2 <> encodeWord 2 <> encode nonce
   decode = do
     len <- decodeListLen
     decodeWord >>= \case
@@ -243,16 +223,12 @@ instance Serialise Request where
       1 -> PingR <$> do
         matchSize 1 "decode(Request).PingR" len
         pure Ping
-      2 -> RequestAuthR <$> do
-        matchSize 2 "decode(Request).RequestAuthR" len
-        RequestAuth <$> decode
       n -> fail $ "decode(Request): invalid tag: " ++ show n
 
 ----------------------------------------
 
 data Response = ReturnNodesR !ReturnNodes
               | PongR !Pong
-              | AuthProofR !AuthProof
   deriving (Eq, Show)
 
 data ReturnNodes = ReturnNodes ![Node]
@@ -261,19 +237,12 @@ data ReturnNodes = ReturnNodes ![Node]
 data Pong = Pong
   deriving (Eq, Show)
 
-data AuthProof = AuthProof !C.PublicKey !C.Signature
-  deriving (Eq, Show)
-
 instance Serialise Response where
   encode = \case
     ReturnNodesR (ReturnNodes peers) ->
       encodeListLen 2 <> encodeWord 0 <> encode peers
     PongR Pong ->
       encodeListLen 1 <> encodeWord 1
-    AuthProofR (AuthProof pkey sig) ->
-         encodeListLen 3 <> encodeWord 2
-      <> encode (BA.convert pkey :: BS.ByteString)
-      <> encode (BA.convert sig  :: BS.ByteString)
   decode = do
     len <- decodeListLen
     decodeWord >>= \case
@@ -283,10 +252,6 @@ instance Serialise Response where
       1 -> PongR <$> do
         matchSize 1 "decode(Response).PongR" len
         pure Pong
-      2 -> AuthProofR <$> do
-        let label = "decode(Response).AuthProofR"
-        matchSize 3 label len
-        AuthProof <$> decodePublicKey label <*> decodeSignature label
       n -> fail $ "decode(Response): invalid tag: " ++ show n
 
 ----------------------------------------

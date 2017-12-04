@@ -71,10 +71,6 @@ instance IsRequest Ping where
   type ResponseType Ping = Pong
   toRequest = PingR
 
-instance IsRequest RequestAuth where
-  type ResponseType RequestAuth = AuthProof
-  toRequest = RequestAuthR
-
 -- | Asynchronously send a request to a peer and perform specific actions on
 -- failure or response arrival. Note that there are multiple things that can go
 -- wrong:
@@ -166,18 +162,6 @@ handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
       in (table, findClosest (configK pdConfig) targetId table)
     sendResponse $ ReturnNodesR (ReturnNodes peers)
   PingR Ping -> sendResponse $ PongR Pong
-  RequestAuthR (RequestAuth nonce) -> do
-    -- We got authentication request. It usually happens when our ip or port has
-    -- changed, the sender has the old entry in his routing table and wants to
-    -- update it, but needs a confirmation that we are not trying to eclipse an
-    -- existing node. He sends us nonce, which we sign using our private key,
-    -- then send a response containing our public key and the signature we just
-    -- created. The sender can verify that the public key belongs to us as he
-    -- has our id (which is its hash) and that we possess the corresponding
-    -- private key by checking that signature is correct.
-    let signature = C.sign pdSecretKey pdPublicKey nonce
-        response  = AuthProofR (AuthProof pdPublicKey signature)
-    sendResponse response
   where
     sendResponse rsp =
       let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId rq rsp)
@@ -199,7 +183,6 @@ handleResponse responseHandlers peer rpcId pkey signature rsp = do
     Just handler -> case rsp of
       ReturnNodesR returnPeers -> runHandler handler returnPeers
       PongR pong               -> runHandler handler pong
-      AuthProofR authProof     -> runHandler handler authProof
   where
     retrieveHandler = modifyMVarP responseHandlers $ \handlers ->
       case M.lookup rpcId handlers of

@@ -8,7 +8,6 @@ import Control.Concurrent.Async
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Monad
-import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
@@ -23,23 +22,16 @@ bootstrap
   -> Node -- ^ Initial peer
   -> IO ()
 bootstrap pd node = do
-  nonce  <- randomNonce
   result <- newEmptyMVar
-  -- Check authenticity of initial peer.
-  sendRequest pd (RequestAuth nonce) node
-    (putMVar result Nothing)
-    (\(AuthProof pkey signature) ->
-       if nodeId node == mkPeerId pkey && C.verify pkey nonce signature
-       then do
-         modifyMVarP_ (pdRoutingTable pd) $ insertPeer (pdConfig pd) node
-         putMVar result (Just True)
-       else putMVar result (Just False))
+  -- Check if the initial peer is alive.
+  sendRequest pd Ping node (putMVar result False) $ \Pong -> do
+    modifyMVarP_ (pdRoutingTable pd) $ insertPeer (pdConfig pd) node
+    putMVar result True
 
   readMVar result >>= \case
-    Nothing    -> error "bootstrap: couldn't connect to peer"
-    Just False -> error "bootstrap: peer authorization failed"
-    Just True  -> do
-      -- If verification went fine, populate the neighbourhood.
+    False -> error "bootstrap: couldn't connect to peer"
+    True  -> do
+      -- If we sucessfully contacted the peer, populate the neighbourhood.
       void $ peerLookup pd =<< withMVarP (pdRoutingTable pd) rtId
 
 ----------------------------------------
