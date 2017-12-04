@@ -3,11 +3,11 @@ module Main where
 import Control.Concurrent
 import Control.Monad
 import Network.Socket
-import Text.Pretty.Simple
 import System.Random
-import qualified Data.ByteString as BS
+import Text.Pretty.Simple
 import qualified Crypto.Error as C
 import qualified Crypto.PubKey.Ed25519 as C
+import qualified Data.ByteString as BS
 
 import Network.PeerDiscovery
 import Network.PeerDiscovery.Operations
@@ -23,9 +23,6 @@ import Network.PeerDiscovery.Types
 --
 -- - Abstract the network layer away to be able to use mockup routing for
 --   large-scale testing.
---
--- - Prevent ourselves from entering the routing table and being part of the
---   result of peer lookup - we don't want to talk to ourselves.
 --
 -- NOT CLEAR:
 --

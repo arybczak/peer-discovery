@@ -14,14 +14,16 @@ import Data.Monoid
 import Data.Typeable
 import Network.Socket hiding (recvFrom, sendTo)
 import Network.Socket.ByteString
-import qualified Data.ByteString as BS
 import qualified Crypto.PubKey.Ed25519 as C
+import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
 
-import Network.PeerDiscovery.Types
 import Network.PeerDiscovery.Routing
+import Network.PeerDiscovery.Types
 import Network.PeerDiscovery.Util
 
+-- | Represents all incoming and outgoing communication. Each response is signed
+-- to ensure the integrity of data.
 data Signal = Request  !RpcId                           !Request
             | Response !RpcId !C.PublicKey !C.Signature !Response
   deriving (Eq, Show)
@@ -134,20 +136,20 @@ sendRequest pd reqType peer onFailure onSuccess = do
 
 -- | Handle appropriate 'Request'.
 handleRequest :: PeerDiscovery -> Peer -> RpcId -> Request -> IO ()
-handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
+handleRequest PeerDiscovery{..} peer rpcId req = case req of
   FindNodeR (FindNode peerId mport targetId) -> do
     peers <- modifyMVarP pdRoutingTable $ \oldTable ->
       let mnode = mport <&> \port -> Node { nodeId   = peerId
                                           , nodePeer = peer { peerPort = port }
                                           }
           -- If we got a port number, we assume that peer is globally reachable
-          -- under its IP address and received port number, so we insert it into
-          -- our routing table. In case it lied it's not a big deal, it will be
-          -- evicted soon enough.
+          -- under his IP address and received port number, so we insert him
+          -- into our routing table. In case he lied it's not a big deal, he
+          -- either won't make it or will be evicted soon.
           table =
             -- If it comes to nodes who send us requests, we only insert them
             -- into the table if the highest bit of their id is different than
-            -- ours. This way an adversary:
+            -- ours. This way a potential adversary:
             --
             -- 1) Can't directly influence our neighbourhood by flooding us with
             -- reqeusts from nodes that are close to us.
@@ -164,17 +166,17 @@ handleRequest PeerDiscovery{..} peer rpcId rq = case rq of
   PingR Ping -> sendResponse $ PongR Pong
   where
     sendResponse rsp =
-      let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId rq rsp)
+      let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId req rsp)
       in sendSignal pdSocket (Response rpcId pdPublicKey signature rsp) peer
 
 -- | Handle 'Response' signals by looking up and running appropriate handler
 -- that was registered when a 'Request' was sent.
 handleResponse
   :: ResponseHandlers
-  -> Peer
-  -> RpcId
-  -> C.PublicKey
-  -> C.Signature
+  -> Peer        -- ^ Address of the responder
+  -> RpcId       -- ^ Id of the request/response
+  -> C.PublicKey -- ^ Public key of the responder
+  -> C.Signature -- ^ Signature of the id, request and response
   -> Response
   -> IO ()
 handleResponse responseHandlers peer rpcId pkey signature rsp = do
@@ -194,16 +196,16 @@ handleResponse responseHandlers peer rpcId pkey signature rsp = do
       killThread rhTimeoutHandlerId
       if | node /= rhRecipient -> do
              putStrLn $ "handleResponse: response recipient " ++ show rhRecipient
-                     ++ " doesn't match source of the response: " ++ show node
+                     ++ " doesn't match the responder: " ++ show node
              rhOnFailure
          | not $ C.verify pkey (toMessage rpcId rhRequest rsp) signature -> do
-             putStrLn $ "handleResponse: response verification failed"
+             putStrLn $ "handleResponse: signature verification failed"
              rhOnFailure
          | otherwise -> case rhHandler <$> cast a of
              Just run -> run
              Nothing  -> do
                putStrLn $ "handleResponse: expected response of type "
-                        ++ show (typeOf (arg rhHandler)) ++ ", but got "
+                        ++ show (typeOf (argOf rhHandler)) ++ ", but got "
                         ++ show (typeOf a) ++ " for " ++ show rpcId
                rhOnFailure
       where
@@ -211,8 +213,8 @@ handleResponse responseHandlers peer rpcId pkey signature rsp = do
                     , nodePeer = peer
                     }
 
-        arg :: (r -> IO ()) -> r
-        arg _ = error "handleResponse.arg"
+        argOf :: (r -> IO ()) -> r
+        argOf _ = error "handleResponse.arg"
 
 ----------------------------------------
 
