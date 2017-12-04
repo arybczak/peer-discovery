@@ -28,4 +28,5 @@ dispatcher :: PeerDiscovery -> TBQueue (Peer, Signal) -> IO r
 dispatcher pd queue = do
   forever $ atomically (readTBQueue queue) >>= \case
     (peer, Request rpcId rq)   -> handleRequest pd peer rpcId rq
-    (peer, Response rpcId rsp) -> handleResponse (pdResponseHandlers pd) peer rpcId rsp
+    (peer, Response rpcId pkey signature rsp) ->
+      handleResponse (pdResponseHandlers pd) peer rpcId pkey signature rsp

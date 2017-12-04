@@ -26,7 +26,7 @@ bootstrap pd node = do
   nonce  <- randomNonce
   result <- newEmptyMVar
   -- Check authenticity of initial peer.
-  sendRequest pd (RequestAuth nonce) (nodePeer node)
+  sendRequest pd (RequestAuth nonce) node
     (putMVar result Nothing)
     (\(AuthProof pkey signature) ->
        if nodeId node == mkPeerId pkey && C.verify pkey nonce signature
@@ -130,7 +130,7 @@ peerLookup pd@PeerDiscovery{..} targetId = do
     sendFindNodeRequests queue peers = do
       myId <- withMVarP pdRoutingTable rtId
       forM_ peers $ \(targetDist, peer) -> do
-        sendRequest pd (FindNode myId pdPublicPort targetId) (nodePeer peer)
+        sendRequest pd (FindNode myId pdPublicPort targetId) peer
           (atomically . writeTQueue queue $ Failure targetDist peer)
           (atomically . writeTQueue queue . Success peer)
 

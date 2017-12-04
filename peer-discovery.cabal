@@ -15,7 +15,6 @@ cabal-version:       >=1.10
 library
   exposed-modules:     Network.PeerDiscovery
                        Network.PeerDiscovery.Communication
-                       Network.PeerDiscovery.Communication.Types
                        Network.PeerDiscovery.Operations
                        Network.PeerDiscovery.Routing
                        Network.PeerDiscovery.Types

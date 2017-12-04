@@ -2,6 +2,10 @@ module Network.PeerDiscovery.Util
   ( -- * CBOR
     serialise'
   , deserialiseOrFail'
+  , encodePublicKey
+  , decodePublicKey
+  , encodeSignature
+  , decodeSignature
   , encodePortNumber
   , decodePortNumber
   , matchSize
@@ -24,6 +28,9 @@ import Data.Bits
 import Data.Word
 import Network.Socket
 import System.Random.Shuffle
+import qualified Crypto.Error as C
+import qualified Crypto.PubKey.Ed25519 as C
+import qualified Data.ByteArray as BA
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as M
@@ -35,6 +42,22 @@ serialise' = BSL.toStrict . serialise
 -- | Strict version of 'deserialiseOrFail'.
 deserialiseOrFail' :: Serialise a => BS.ByteString -> Either DeserialiseFailure a
 deserialiseOrFail' = deserialiseOrFail . BSL.fromStrict
+
+encodePublicKey :: C.PublicKey -> Encoding
+encodePublicKey = encode . (BA.convert :: C.PublicKey -> BS.ByteString)
+
+decodePublicKey :: String -> Decoder s C.PublicKey
+decodePublicKey label = decodeBytes <&> C.publicKey >>= \case
+  C.CryptoFailed err  -> fail $ label ++ ": decodePublicKey: " ++ show err
+  C.CryptoPassed pkey -> pure pkey
+
+encodeSignature :: C.Signature -> Encoding
+encodeSignature = encode . (BA.convert :: C.Signature -> BS.ByteString)
+
+decodeSignature :: String -> Decoder s C.Signature
+decodeSignature label = decodeBytes <&> C.signature >>= \case
+  C.CryptoFailed err -> fail $ label ++ ": decodeSignature: " ++ show err
+  C.CryptoPassed sig -> pure sig
 
 -- | Encoder for PortNumber.
 encodePortNumber :: (Functor f, Serialise (f Word16)) => f PortNumber -> Encoding
