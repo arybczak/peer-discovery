@@ -102,11 +102,11 @@ mkPeer _                        = Nothing
 
 ----------------------------------------
 
--- Size of PeerId in bits (224).
+-- Size of PeerId in bits (256).
 peerIdBitSize :: Int
-peerIdBitSize = 224
+peerIdBitSize = 256
 
--- | PeerId is the peer identifier derivable from Peer, i.e. SHA224 of its data.
+-- | PeerId is the peer identifier derivable from its public key.
 newtype PeerId = PeerId Integer
   deriving (Eq, Ord, Serialise)
 
@@ -119,9 +119,9 @@ instance Show PeerId where
         foldr (\i acc -> (if testBit x i then "1" else "0") ++ acc) ""
           $ enumFromThenTo (peerIdBitSize - 1) (peerIdBitSize - 2) (peerIdBitSize - 16)
 
--- | Construct 'PeerId' from 'Peer'.
+-- | Construct 'PeerId' from peer's public key.
 mkPeerId :: C.PublicKey -> PeerId
-mkPeerId = PeerId . mkInteger . BA.convert . H.hashWith H.SHA224
+mkPeerId = PeerId . mkInteger . BA.convert . H.hashWith H.Blake2b_256
 
 -- | Generate random 'PeerId' using cryptographically secure RNG.
 randomPeerId :: IO PeerId
