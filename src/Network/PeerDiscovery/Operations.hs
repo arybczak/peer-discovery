@@ -26,13 +26,13 @@ bootstrap pd node = do
   -- Check if the initial peer is alive.
   sendRequest pd Ping node (putMVar result False) $ \Pong -> do
     modifyMVarP_ (pdRoutingTable pd) $ insertPeer (pdConfig pd) node
+    -- If we sucessfully contacted the peer, populate the neighbourhood.
+    void $ peerLookup pd =<< withMVarP (pdRoutingTable pd) rtId
     putMVar result True
 
   readMVar result >>= \case
     False -> error "bootstrap: couldn't connect to peer"
-    True  -> do
-      -- If we sucessfully contacted the peer, populate the neighbourhood.
-      void $ peerLookup pd =<< withMVarP (pdRoutingTable pd) rtId
+    True  -> return ()
 
 ----------------------------------------
 

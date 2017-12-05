@@ -3,6 +3,7 @@ module Network.PeerDiscovery.Workers
   , dispatcher
   ) where
 
+import Control.Concurrent
 import Control.Concurrent.STM
 import Control.Monad
 import Network.Socket hiding (recvFrom, sendTo)
@@ -25,8 +26,9 @@ receiver sock queue = forever $ do
 
 -- | Handle all incoming signals, both requests and responses.
 dispatcher :: PeerDiscovery -> TBQueue (Peer, Signal) -> IO r
-dispatcher pd queue = do
-  forever $ atomically (readTBQueue queue) >>= \case
-    (peer, Request rpcId rq)   -> handleRequest pd peer rpcId rq
+dispatcher pd queue = forever $ do
+  signal <- atomically $ readTBQueue queue
+  forkIO $ case signal of
+    (peer, Request rpcId rq) -> handleRequest pd peer rpcId rq
     (peer, Response rpcId pkey signature rsp) ->
       handleResponse (pdResponseHandlers pd) peer rpcId pkey signature rsp
