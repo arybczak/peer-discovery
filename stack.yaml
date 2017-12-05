@@ -2,6 +2,11 @@ resolver: lts-9.14
 
 packages:
 - '.'
+- location:
+    git: https://github.com/haskell/stm.git
+    # https://github.com/haskell/stm/pull/2
+    commit: 819470093eccb81d058408076df8903e781f551c
+  extra-dep: true
 
 extra-deps:
 - containers-0.5.10.2
