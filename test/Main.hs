@@ -94,12 +94,15 @@ main = do
                   bootstrap pd node
               ) pds nodes
 
-    forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
+    --forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
     --forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
 
     let pd1 = head pds
         pd2 = pds !! 250
-    pPrint =<< readMVar (pdRoutingTable pd1)
+
     let targetId = mkPeerId $ pdPublicKey pd2
+    putStrLn $ show targetId
+    pPrint =<< readMVar (pdRoutingTable pd2)
+
     pPrint . map (\x -> let d = distance targetId (nodeId x) in (length (show d), d, x))
       =<< peerLookup pd1 targetId
