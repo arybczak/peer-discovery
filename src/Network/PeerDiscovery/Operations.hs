@@ -26,9 +26,11 @@ bootstrap pd node = do
   result <- newEmptyMVar
   -- Check if the initial peer is alive.
   sendRequest pd Ping node (putMVar result False) $ \Pong -> do
-    modifyMVarP_ (pdRoutingTable pd) $ insertPeer (pdConfig pd) node
+    -- We successfully contacted (and thus authenticated) the initial peer, so
+    -- it's safe to insert him into the routing table.
+    modifyMVarP_ (pdRoutingTable pd) $ unsafeInsertPeer (pdConfig pd) node
     myId <- withMVarP (pdRoutingTable pd) rtId
-    -- If we sucessfully contacted the peer, populate the neighbourhood.
+    -- Populate our neighbourhood.
     void $ peerLookup pd myId
     fix $ \loop -> do
       targetId <- randomPeerId
@@ -158,9 +160,11 @@ peerLookup pd@PeerDiscovery{..} targetId = do
               -- into the routing table, update our list of peers closest to the
               -- target and mark the peer as queried.
               Success peer (ReturnNodes peers) -> do
-                modifyMVarP_ pdRoutingTable $ insertPeer pdConfig peer
-                let newClosest = updateClosestWith failed closest peers
+                -- We successfully contacted (and thus authenticated) the peer,
+                -- so it's safe to put him into the routing table.
+                modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig peer
 
+                let newClosest = updateClosestWith failed closest peers
                 -- If the closest peer changed, send another round of FindNode
                 -- requests. Note that it's safe to call findMin here as closest
                 -- can't be empty (we wouldn't be here if it was) and we just

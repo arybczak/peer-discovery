@@ -23,7 +23,7 @@ import Network.PeerDiscovery.Types
 import Network.PeerDiscovery.Util
 
 -- | Represents all incoming and outgoing communication. Each response is signed
--- to ensure the integrity of data.
+-- to ensure the integrity of data and legitimacy of the responder.
 data Signal = Request  !RpcId                           !Request
             | Response !RpcId !C.PublicKey !C.Signature !Response
   deriving (Eq, Show)
@@ -136,32 +136,45 @@ sendRequest pd reqType peer onFailure onSuccess = do
 
 -- | Handle appropriate 'Request'.
 handleRequest :: PeerDiscovery -> Peer -> RpcId -> Request -> IO ()
-handleRequest PeerDiscovery{..} peer rpcId req = case req of
+handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
   FindNodeR (FindNode peerId mport targetId) -> do
-    peers <- modifyMVarP pdRoutingTable $ \oldTable ->
+    peers <- modifyMVar pdRoutingTable $ \oldTable -> do
       let mnode = mport <&> \port -> Node { nodeId   = peerId
                                           , nodePeer = peer { peerPort = port }
                                           }
-          -- If we got a port number, we assume that peer is globally reachable
-          -- under his IP address and received port number, so we insert him
-          -- into our routing table. In case he lied it's not a big deal, he
-          -- either won't make it or will be evicted soon.
-          table =
-            -- If it comes to nodes who send us requests, we only insert them
-            -- into the table if the highest bit of their id is different than
-            -- ours. This way a potential adversary:
-            --
-            -- 1) Can't directly influence our neighbourhood by flooding us with
-            -- reqeusts from nodes that are close to us.
-            --
-            -- 2) Will have a hard time getting a large influence in our routing
-            -- table because the branch representing different highest bit
-            -- accounts for half of the network, so its buckets will most likely
-            -- be full.
-            if peerId `distance` rtId oldTable < 2^(peerIdBitSize - 1)
-            then maybe oldTable (\node -> clearTimeoutPeer node oldTable)    mnode
-            else maybe oldTable (\node -> insertPeer pdConfig node oldTable) mnode
-      in (table, findClosest (configK pdConfig) targetId table)
+      -- If we got a port number, we assume that peer is globally reachable
+      -- under his IP address and received port number, so we insert him into
+      -- our routing table. In case he lied it's not a big deal, he either won't
+      -- make it or will be evicted soon.
+      !table <- case mnode of
+         -- If it comes to nodes who send us requests, we only insert them into
+         -- the table if the highest bit of their id is different than
+         -- ours. This way a potential adversary:
+         --
+         -- 1) Can't directly influence our neighbourhood by flooding us with
+         -- reqeusts from nodes that are close to us.
+         --
+         -- 2) Will have a hard time getting a large influence in our routing
+         -- table because the branch representing different highest bit accounts
+         -- for half of the network, so its buckets will most likely be full.
+         Just node | testPeerIdBit peerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
+           case insertPeer pdConfig node oldTable of
+             Right newTable -> return newTable
+             Left oldNode -> do
+               -- Either the node changed address or we're dealing with an
+               -- impersonator. We ping asynchronously the old address to
+               -- check. If we get a response, we do nothing. If we don't, we
+               -- update node's address. Note that it's still possible that it's
+               -- an impersonator trying to eclipse inactive node, but it
+               -- doesn't matter, because he won't be able to respond to any
+               -- requests as he doesn't have private key corresponding to the
+               -- identifier he's trying to hijack.
+               sendRequest pd Ping oldNode
+                 (modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node)
+                 (\Pong -> return ())
+               return oldTable
+         _ -> return oldTable
+      return (table, findClosest (configK pdConfig) targetId table)
     sendResponse $ ReturnNodesR (ReturnNodes peers)
   PingR Ping -> sendResponse $ PongR Pong
   where
