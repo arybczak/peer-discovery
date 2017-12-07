@@ -8,6 +8,7 @@ import Control.Concurrent.Async
 import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Monad
+import Data.Function
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
 
@@ -26,8 +27,15 @@ bootstrap pd node = do
   -- Check if the initial peer is alive.
   sendRequest pd Ping node (putMVar result False) $ \Pong -> do
     modifyMVarP_ (pdRoutingTable pd) $ insertPeer (pdConfig pd) node
+    myId <- withMVarP (pdRoutingTable pd) rtId
     -- If we sucessfully contacted the peer, populate the neighbourhood.
-    void $ peerLookup pd =<< withMVarP (pdRoutingTable pd) rtId
+    void $ peerLookup pd myId
+    fix $ \loop -> do
+      targetId <- randomPeerId
+      -- Populate part of the routing table holding nodes far from us.
+      if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
+        then void $ peerLookup pd targetId
+        else loop
     putMVar result True
 
   readMVar result >>= \case
