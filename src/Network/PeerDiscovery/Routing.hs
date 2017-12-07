@@ -40,14 +40,11 @@ insertPeer conf peer rt =
           case S.findIndexL ((== nodeId peer) . nodeId . niNode) nodes of
             Just nodeIdx -> Bucket $ node S.<| S.deleteAt nodeIdx nodes
             Nothing      -> Bucket $ node S.<|                    nodes
-        | myBranch || depth < configB conf ->
-            -- If we are in a branch that represents prefix of our id or we are
-            -- above max depth, split existing bucket into two and recursively
-            -- select the appropriate one.
-            --
-            -- Note that if we don't have an id (meaning that we didn't join the
-            -- network) we treat all branches equally, i.e. we split them only
-            -- until a certain depth is reached.
+        | myBranch || depth `rem` configB conf /= 0 ->
+            -- If we are in a branch that represents prefix of our id or the
+            -- condition taken from the original Kademlia paper (section 4.2) is
+            -- met, split existing bucket into two and recursively select the
+            -- appropriate one.
             let (left, right) = S.partition ((`testPeerIdBit` depth) . nodeId . niNode)
                                             nodes
             in go myBranch depth $ Split (Bucket left) (Bucket right)
