@@ -157,22 +157,31 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
          -- 2) Will have a hard time getting a large influence in our routing
          -- table because the branch representing different highest bit accounts
          -- for half of the network, so its buckets will most likely be full.
-         Just node | testPeerIdBit peerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
-           case insertPeer pdConfig node oldTable of
-             Right newTable -> return newTable
-             Left oldNode -> do
-               -- Either the node changed address or we're dealing with an
-               -- impersonator. We ping asynchronously the old address to
-               -- check. If we get a response, we do nothing. If we don't, we
-               -- update node's address. Note that it's still possible that it's
-               -- an impersonator trying to eclipse inactive node, but it
-               -- doesn't matter, because he won't be able to respond to any
-               -- requests as he doesn't have private key corresponding to the
-               -- identifier he's trying to hijack.
-               sendRequest pd Ping oldNode
-                 (modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node)
-                 (\Pong -> return ())
-               return oldTable
+         Just node
+           | testPeerIdBit peerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
+             case insertPeer pdConfig node oldTable of
+               Right newTable -> return newTable
+               Left oldNode -> do
+                 -- Either the node address changed or we're dealing with an
+                 -- impersonator, so we only update the address if we don't get
+                 -- a response from the old address and we get a response from
+                 -- the new one. Note that simply pinging the new address is not
+                 -- sufficient, as an impersonator can forward ping request to
+                 -- the existing node and then forward his response back to
+                 -- us. He won't be able to modify the subsequent traffic
+                 -- (because he can't respond to requests on its own as he lacks
+                 -- the appropriate private kay), but he can block it.
+                 sendRequest pd Ping oldNode
+                   (sendRequest pd Ping node
+                     (return ())
+                     (\Pong ->
+                        modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node))
+                   (\Pong -> return ())
+                 return oldTable
+           | otherwise ->
+             -- If the highest bit is the same, we at most reset timeout count
+             -- of the node if it's in our routing table.
+             return $ clearTimeoutPeer node oldTable
          _ -> return oldTable
       return (table, findClosest (configK pdConfig) targetId table)
     sendResponse $ ReturnNodesR (ReturnNodes peers)
