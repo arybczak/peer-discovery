@@ -154,11 +154,12 @@ sendRequestSync pd reqType peer onFailure onSuccess = do
 -- | Handle appropriate 'Request'.
 handleRequest :: PeerDiscovery -> Peer -> RpcId -> Request -> IO ()
 handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
-  FindNodeR (FindNode peerId mport targetId) -> do
+  FindNodeR FindNode{..} -> do
     peers <- modifyMVar pdRoutingTable $ \oldTable -> do
-      let mnode = mport <&> \port -> Node { nodeId   = peerId
-                                          , nodePeer = peer { peerPort = port }
-                                          }
+      let mnode = fnPublicPort <&> \port ->
+            Node { nodeId   = fnPeerId
+                 , nodePeer = peer { peerPort = port }
+                 }
       -- If we got a port number, we assume that peer is globally reachable
       -- under his IP address and received port number, so we insert him into
       -- our routing table. In case he lied it's not a big deal, he either won't
@@ -175,7 +176,7 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
          -- table because the branch representing different highest bit accounts
          -- for half of the network, so its buckets will most likely be full.
          Just node
-           | testPeerIdBit peerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
+           | testPeerIdBit fnPeerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
              case insertPeer pdConfig node oldTable of
                Right newTable -> return newTable
                Left oldNode -> do
@@ -200,11 +201,11 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
              -- of the node if it's in our routing table.
              return $ clearTimeoutPeer node oldTable
          _ -> return oldTable
-      return (table, findClosest (configK pdConfig) targetId table)
+      return (table, findClosest (configK pdConfig) fnTargetId table)
     sendResponse peer $ ReturnNodesR (ReturnNodes peers)
-  PingR (Ping mport) ->
+  PingR Ping{..} ->
     -- If port number was specified, respond there.
-    let receiver = maybe peer (\port -> peer { peerPort = port }) mport
+    let receiver = maybe peer (\port -> peer { peerPort = port }) pingReturnPort
     in sendResponse receiver $ PongR Pong
   where
     sendResponse receiver rsp =

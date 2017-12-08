@@ -201,11 +201,15 @@ data Request = FindNodeR !FindNode
              | PingR !Ping
   deriving (Eq, Show)
 
-data FindNode = FindNode !PeerId !(Maybe PortNumber) !PeerId
-  deriving (Eq, Show)
+data FindNode = FindNode
+  { fnPeerId     :: !PeerId
+  , fnPublicPort :: !(Maybe PortNumber)
+  , fnTargetId   :: !PeerId
+  } deriving (Eq, Show)
 
-data Ping = Ping !(Maybe PortNumber)
-  deriving (Eq, Show)
+data Ping = Ping
+  { pingReturnPort :: !(Maybe PortNumber)
+  } deriving (Eq, Show)
 
 instance Serialise Request where
   encode = \case

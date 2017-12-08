@@ -138,10 +138,13 @@ peerLookup pd@PeerDiscovery{..} targetId = do
     sendFindNodeRequests queue peers = do
       publicPort <- readMVar pdPublicPort
       myId <- withMVarP pdRoutingTable rtId
-      forM_ peers $ \(targetDist, peer) -> do
-        sendRequest pd (FindNode myId publicPort targetId) peer
-          (atomically . writeTQueue queue $ Failure targetDist peer)
-          (atomically . writeTQueue queue . Success peer)
+      let findNode = FindNode { fnPeerId = myId
+                              , fnPublicPort = publicPort
+                              , fnTargetId = targetId
+                              }
+      forM_ peers $ \(targetDist, peer) -> sendRequest pd findNode peer
+        (atomically . writeTQueue queue $ Failure targetDist peer)
+        (atomically . writeTQueue queue . Success peer)
 
     processResponses
       :: TQueue Reply
