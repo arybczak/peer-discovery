@@ -204,7 +204,7 @@ data Request = FindNodeR !FindNode
 data FindNode = FindNode !PeerId !(Maybe PortNumber) !PeerId
   deriving (Eq, Show)
 
-data Ping = Ping
+data Ping = Ping !(Maybe PortNumber)
   deriving (Eq, Show)
 
 instance Serialise Request where
@@ -212,8 +212,8 @@ instance Serialise Request where
     FindNodeR (FindNode peerId mport targetId) ->
          encodeListLen 4 <> encodeWord 0
       <> encode peerId <> encodePortNumber mport <> encode targetId
-    PingR Ping ->
-      encodeListLen 1 <> encodeWord 1
+    PingR (Ping mport) ->
+      encodeListLen 2 <> encodeWord 1 <> encodePortNumber mport
   decode = do
     len <- decodeListLen
     decodeWord >>= \case
@@ -221,8 +221,8 @@ instance Serialise Request where
         matchSize 4 "decode(Request).FindNodeR" len
         FindNode <$> decode <*> decodePortNumber <*> decode
       1 -> PingR <$> do
-        matchSize 1 "decode(Request).PingR" len
-        pure Ping
+        matchSize 2 "decode(Request).PingR" len
+        Ping <$> decodePortNumber
       n -> fail $ "decode(Request): invalid tag: " ++ show n
 
 ----------------------------------------
@@ -271,7 +271,7 @@ type ResponseHandlers = MVar (M.Map RpcId ResponseHandler)
 -- | Primary object of interest.
 data PeerDiscovery = PeerDiscovery
   { pdBindAddr         :: !Peer
-  , pdPublicPort       :: !(Maybe PortNumber)
+  , pdPublicPort       :: !(MVar (Maybe PortNumber))
   , pdPublicKey        :: !C.PublicKey
   , pdSecretKey        :: !C.SecretKey
   , pdSocket           :: !Socket

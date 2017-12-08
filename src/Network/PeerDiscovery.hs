@@ -28,9 +28,9 @@ withPeerDiscovery
   -> IO r
 withPeerDiscovery pdConfig joinNetwork mskey mhost port k = do
   signalQueue        <- newTBQueueIO $ configSignalQueueSize pdConfig
+  pdPublicPort       <- newMVar $ if joinNetwork then Just port else Nothing
   pdSecretKey        <- maybe C.generateSecretKey pure mskey
   let pdPublicKey    = C.toPublic pdSecretKey
-      pdPublicPort   = if joinNetwork then Just port else Nothing
   pdRoutingTable     <- newMVar . initRoutingTable $ mkPeerId pdPublicKey
   pdResponseHandlers <- newMVar M.empty
   withUdpSocket $ \pdBindAddr pdSocket -> let pd = PeerDiscovery{..} in do

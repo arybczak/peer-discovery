@@ -1,6 +1,7 @@
 module Network.PeerDiscovery.Communication
   ( Signal(..)
   , sendRequest
+  , sendRequestSync
   , handleRequest
   , handleResponse
   ) where
@@ -132,6 +133,22 @@ sendRequest pd reqType peer onFailure onSuccess = do
         putStrLn $ "Request " ++ show reqType ++ " with " ++ show rpcId ++ " timed out"
         onFailure
 
+-- | Synchronous variant of 'sendRequest'.
+sendRequestSync
+  :: (IsRequest req, Show req)
+  => PeerDiscovery
+  -> req                        -- ^ Request to be sent
+  -> Node                       -- ^ Recipient
+  -> IO r                       -- ^ Action to perform on failure
+  -> (ResponseType req -> IO r) -- ^ Action to perform on success
+  -> IO r
+sendRequestSync pd reqType peer onFailure onSuccess = do
+  result <- newEmptyMVar
+  sendRequest pd reqType peer
+    (putMVar result =<< onFailure)
+    ((putMVar result =<<) . onSuccess)
+  readMVar result
+
 ----------------------------------------
 
 -- | Handle appropriate 'Request'.
@@ -171,8 +188,8 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
                  -- us. He won't be able to modify the subsequent traffic
                  -- (because he can't respond to requests on its own as he lacks
                  -- the appropriate private kay), but he can block it.
-                 sendRequest pd Ping oldNode
-                   (sendRequest pd Ping node
+                 sendRequest pd (Ping Nothing) oldNode
+                   (sendRequest pd (Ping Nothing) node
                      (return ())
                      (\Pong ->
                         modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node))
@@ -184,12 +201,15 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
              return $ clearTimeoutPeer node oldTable
          _ -> return oldTable
       return (table, findClosest (configK pdConfig) targetId table)
-    sendResponse $ ReturnNodesR (ReturnNodes peers)
-  PingR Ping -> sendResponse $ PongR Pong
+    sendResponse peer $ ReturnNodesR (ReturnNodes peers)
+  PingR (Ping mport) ->
+    -- If port number was specified, respond there.
+    let receiver = maybe peer (\port -> peer { peerPort = port }) mport
+    in sendResponse receiver $ PongR Pong
   where
-    sendResponse rsp =
+    sendResponse receiver rsp =
       let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId req rsp)
-      in sendSignal pdSocket (Response rpcId pdPublicKey signature rsp) peer
+      in sendSignal pdSocket (Response rpcId pdPublicKey signature rsp) receiver
 
 -- | Handle 'Response' signals by looking up and running appropriate handler
 -- that was registered when a 'Request' was sent.

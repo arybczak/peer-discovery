@@ -21,11 +21,22 @@ import Network.PeerDiscovery.Util
 bootstrap
   :: PeerDiscovery
   -> Node -- ^ Initial peer
-  -> IO ()
+  -> IO Bool
 bootstrap pd node = do
-  result <- newEmptyMVar
   -- Check if the initial peer is alive.
-  sendRequest pd Ping node (putMVar result False) $ \Pong -> do
+  sendRequestSync pd (Ping Nothing) node (return False) $ \Pong -> do
+    readMVar (pdPublicPort pd) >>= \case
+      Nothing   -> return ()
+      Just port -> do
+        -- Check if we're globally reachable on the specified port.
+        reachable <- sendRequestSync pd (Ping $ Just port) node
+          (return False)
+          (\Pong -> return True)
+        -- If we're not, erase the port so we don't pretend in future
+        -- communication that we are.
+        when (not reachable) $ do
+          putStrLn $ "bootstrap: we are not globally reachable on " ++ show port
+          modifyMVarP_ (pdPublicPort pd) (const Nothing)
     -- We successfully contacted (and thus authenticated) the initial peer, so
     -- it's safe to insert him into the routing table.
     modifyMVarP_ (pdRoutingTable pd) $ unsafeInsertPeer (pdConfig pd) node
@@ -36,13 +47,8 @@ bootstrap pd node = do
       targetId <- randomPeerId
       -- Populate part of the routing table holding nodes far from us.
       if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
-        then void $ peerLookup pd targetId
+        then True <$ peerLookup pd targetId
         else loop
-    putMVar result True
-
-  readMVar result >>= \case
-    False -> error "bootstrap: couldn't connect to peer"
-    True  -> return ()
 
 ----------------------------------------
 
@@ -130,9 +136,10 @@ peerLookup pd@PeerDiscovery{..} targetId = do
       -> [(Integer, Node)]
       -> IO ()
     sendFindNodeRequests queue peers = do
+      publicPort <- readMVar pdPublicPort
       myId <- withMVarP pdRoutingTable rtId
       forM_ peers $ \(targetDist, peer) -> do
-        sendRequest pd (FindNode myId pdPublicPort targetId) peer
+        sendRequest pd (FindNode myId publicPort targetId) peer
           (atomically . writeTQueue queue $ Failure targetDist peer)
           (atomically . writeTQueue queue . Success peer)
 

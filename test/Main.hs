@@ -91,7 +91,8 @@ main = do
                 in last xs : init xs
     zipWithM_ (\pd node -> do
                   putStrLn $ "Bootstrapping " ++ show (pdBindAddr pd)
-                  bootstrap pd node
+                  True <- bootstrap pd node
+                  return ()
               ) pds nodes
 
     --forM_ pds $ \pd -> void $ peerLookup pd =<< randomPeerId
