@@ -1,6 +1,8 @@
 *.diff
 *.patch
 .cabal-sandbox
+cabal.project*
 cabal.sandbox.config
 dist
+dist-newstyle
 TAGS
