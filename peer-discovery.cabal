@@ -31,7 +31,7 @@ library
                        network,
                        random-shuffle,
                        serialise,
-                       stm
+                       stm >= 2.4.5.0
 
   ghc-options:         -Wall
   hs-source-dirs:      src
