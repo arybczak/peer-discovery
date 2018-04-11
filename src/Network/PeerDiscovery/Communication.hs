@@ -1,20 +1,14 @@
 module Network.PeerDiscovery.Communication
-  ( Signal(..)
-  , sendRequest
+  ( sendRequest
   , sendRequestSync
   , handleRequest
   , handleResponse
   ) where
 
-import Codec.CBOR.Decoding
-import Codec.CBOR.Encoding
-import Codec.Serialise
 import Control.Concurrent
 import Control.Monad
 import Data.Monoid
 import Data.Typeable
-import Network.Socket hiding (recvFrom, sendTo)
-import Network.Socket.ByteString
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M
@@ -22,43 +16,6 @@ import qualified Data.Map.Strict as M
 import Network.PeerDiscovery.Routing
 import Network.PeerDiscovery.Types
 import Network.PeerDiscovery.Util
-
--- | Represents all incoming and outgoing communication. Each response is signed
--- to ensure the integrity of data and legitimacy of the responder.
-data Signal = Request  !RpcId                           !Request
-            | Response !RpcId !C.PublicKey !C.Signature !Response
-  deriving (Eq, Show)
-
-instance Serialise Signal where
-  encode = \case
-    Request  rpcId rq  -> encodeListLen 3
-                       <> encodeWord 0
-                       <> encode rpcId
-                       <> encode rq
-    Response rpcId pkey signature rsp -> encodeListLen 5
-                                      <> encodeWord 1
-                                      <> encode rpcId
-                                      <> encodePublicKey pkey
-                                      <> encodeSignature signature
-                                      <> encode rsp
-  decode = do
-    len <- decodeListLen
-    decodeWord >>= \case
-      0 -> do
-        matchSize 3 "decode(Signal).Request" len
-        Request <$> decode <*> decode
-      1 -> do
-        let label = "decode(Signal).Response"
-        matchSize 5 label len
-        Response <$> decode
-                 <*> decodePublicKey label
-                 <*> decodeSignature label
-                 <*> decode
-      n -> fail $ "decode(Signal): invalid tag: " ++ show n
-
-sendSignal :: Socket -> Signal -> Peer -> IO ()
-sendSignal sock signal Peer{..} = do
-  void $ sendTo sock (serialise' signal) (SockAddrInet peerPort peerAddress)
 
 ----------------------------------------
 
@@ -96,7 +53,7 @@ instance IsRequest Ping where
 -- parameter signifying the type of failure.
 sendRequest
   :: (IsRequest req, Show req)
-  => PeerDiscovery
+  => PeerDiscovery cm
   -> req                         -- ^ Request to be sent
   -> Node                        -- ^ Recipient
   -> IO ()                       -- ^ Action to perform on failure
@@ -107,7 +64,7 @@ sendRequest pd reqType peer onFailure onSuccess = do
   let request = toRequest reqType
       signal  = Request rpcId request
   modifyMVar_ (pdResponseHandlers pd) $ \handlers -> do
-    sendSignal (pdSocket pd) signal (nodePeer peer)
+    sendTo (pdCommInterface pd) (nodePeer peer) signal
     tid <- forkIO (timeoutHandler rpcId)
     let handler = ResponseHandler { rhRequest          = request
                                   , rhRecipient        = peer
@@ -136,7 +93,7 @@ sendRequest pd reqType peer onFailure onSuccess = do
 -- | Synchronous variant of 'sendRequest'.
 sendRequestSync
   :: (IsRequest req, Show req)
-  => PeerDiscovery
+  => PeerDiscovery cm
   -> req                        -- ^ Request to be sent
   -> Node                       -- ^ Recipient
   -> IO r                       -- ^ Action to perform on failure
@@ -152,7 +109,7 @@ sendRequestSync pd reqType peer onFailure onSuccess = do
 ----------------------------------------
 
 -- | Handle appropriate 'Request'.
-handleRequest :: PeerDiscovery -> Peer -> RpcId -> Request -> IO ()
+handleRequest :: PeerDiscovery cm -> Peer -> RpcId -> Request -> IO ()
 handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
   FindNodeR FindNode{..} -> do
     peers <- modifyMVar pdRoutingTable $ \oldTable -> do
@@ -210,7 +167,7 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
   where
     sendResponse receiver rsp =
       let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId req rsp)
-      in sendSignal pdSocket (Response rpcId pdPublicKey signature rsp) receiver
+      in sendTo pdCommInterface receiver $ Response rpcId pdPublicKey signature rsp
 
 -- | Handle 'Response' signals by looking up and running appropriate handler
 -- that was registered when a 'Request' was sent.

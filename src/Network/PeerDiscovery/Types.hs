@@ -31,9 +31,13 @@ module Network.PeerDiscovery.Types
   , Response(..)
   , ReturnNodes(..)
   , Pong(..)
+    -- * Signal
+  , Signal(..)
     -- * ResponseHandler
   , ResponseHandler(..)
   , ResponseHandlers
+    -- * Communication abstractions
+  , CommInterface(..)
     -- * PeerDiscovery
   , PeerDiscovery(..)
   ) where
@@ -260,6 +264,41 @@ instance Serialise Response where
 
 ----------------------------------------
 
+-- | Represents all incoming and outgoing communication. Each response is signed
+-- to ensure the integrity of data and legitimacy of the responder.
+data Signal = Request  !RpcId                           !Request
+            | Response !RpcId !C.PublicKey !C.Signature !Response
+  deriving (Eq, Show)
+
+instance Serialise Signal where
+  encode = \case
+    Request  rpcId rq  -> encodeListLen 3
+                       <> encodeWord 0
+                       <> encode rpcId
+                       <> encode rq
+    Response rpcId pkey signature rsp -> encodeListLen 5
+                                      <> encodeWord 1
+                                      <> encode rpcId
+                                      <> encodePublicKey pkey
+                                      <> encodeSignature signature
+                                      <> encode rsp
+  decode = do
+    len <- decodeListLen
+    decodeWord >>= \case
+      0 -> do
+        matchSize 3 "decode(Signal).Request" len
+        Request <$> decode <*> decode
+      1 -> do
+        let label = "decode(Signal).Response"
+        matchSize 5 label len
+        Response <$> decode
+                 <*> decodePublicKey label
+                 <*> decodeSignature label
+                 <*> decode
+      n -> fail $ "decode(Signal): invalid tag: " ++ show n
+
+----------------------------------------
+
 -- | Handler of a specific Request.
 data ResponseHandler = forall r. Typeable r => ResponseHandler
   { rhRequest          :: !Request
@@ -272,13 +311,19 @@ data ResponseHandler = forall r. Typeable r => ResponseHandler
 -- | Map of response handlers.
 type ResponseHandlers = MVar (M.Map RpcId ResponseHandler)
 
+-- | Abstract interface for communication between peer discovery instances.
+data CommInterface = CommInterface
+  { recvFrom :: !(IO (Peer, Signal))
+  , sendTo   :: !(Peer -> Signal -> IO ())
+  }
+
 -- | Primary object of interest.
-data PeerDiscovery = PeerDiscovery
+data PeerDiscovery cm = PeerDiscovery
   { pdBindAddr         :: !Peer
   , pdPublicPort       :: !(MVar (Maybe PortNumber))
   , pdPublicKey        :: !C.PublicKey
   , pdSecretKey        :: !C.SecretKey
-  , pdSocket           :: !Socket
+  , pdCommInterface    :: !CommInterface
   , pdRoutingTable     :: !(MVar RoutingTable)
   , pdResponseHandlers :: !ResponseHandlers
   , pdConfig           :: !Config

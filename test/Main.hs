@@ -10,6 +10,7 @@ import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.ByteString as BS
 
 import Network.PeerDiscovery
+import Network.PeerDiscovery.Communication.Method
 import Network.PeerDiscovery.Operations
 import Network.PeerDiscovery.Types
 
@@ -67,23 +68,24 @@ import Network.PeerDiscovery.Types
 -- | Start multiple peer discovery instances.
 withPeerDiscoveries
   :: Config
-  -> [(Bool, Maybe HostName, PortNumber)]
-  -> ([PeerDiscovery] -> IO r)
+  -> StmRouter
+  -> [(Bool, PortNumber)]
+  -> ([PeerDiscovery StmRouter] -> IO r)
   -> IO r
-withPeerDiscoveries conf connInfos k = go [] connInfos
+withPeerDiscoveries conf router connInfos k = go [] connInfos
   where
     go acc = \case
       []                                -> k (reverse acc)
-      ((joinNetwork, mhost, port):rest) -> do
+      ((joinNetwork, port):rest) -> do
         let C.CryptoPassed skey = C.secretKey . BS.pack . take C.secretKeySize
                                 . randoms . mkStdGen $ fromIntegral port
-        withPeerDiscovery conf joinNetwork (Just skey) mhost port $ \pd ->
+        withPeerDiscovery conf joinNetwork (Just skey) (stmRouter router) port $ \pd ->
           go (pd : acc) rest
 
 main :: IO ()
-main = do
-  let connInfos = map (True, Just "127.0.0.1", ) [3000..3500]
-  withPeerDiscoveries defaultConfig connInfos $ \pds -> do
+main = withStmRouter $ \router -> do
+  let connInfos = map (True, ) [3000..3500]
+  withPeerDiscoveries defaultConfig router connInfos $ \pds -> do
 
     let nodes = let xs = map (\pd -> Node { nodeId = mkPeerId $ pdPublicKey pd
                                           , nodePeer = pdBindAddr pd

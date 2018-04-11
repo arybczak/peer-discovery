@@ -19,7 +19,7 @@ import Network.PeerDiscovery.Util
 
 -- | Bootstrap the instance with initial peer.
 bootstrap
-  :: PeerDiscovery
+  :: PeerDiscovery cm
   -> Node -- ^ Initial peer
   -> IO Bool
 bootstrap pd node = do
@@ -58,7 +58,7 @@ data Reply = Success !Node !ReturnNodes
 
 -- | Perform Kademlia peer lookup operation and return up to k live peers
 -- closest to a target id.
-peerLookup :: PeerDiscovery -> PeerId -> IO [Node]
+peerLookup :: PeerDiscovery cm -> PeerId -> IO [Node]
 peerLookup pd@PeerDiscovery{..} targetId = do
   -- We start by taking k peers closest to the target from our routing table.
   closest <- withMVarP pdRoutingTable $ map (distance targetId . nodeId &&& id)
