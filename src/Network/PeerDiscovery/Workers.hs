@@ -6,6 +6,7 @@ import Control.Concurrent
 import Control.Monad
 
 import Network.PeerDiscovery.Communication
+import Network.PeerDiscovery.Operations
 import Network.PeerDiscovery.Types
 
 -- | Handle all incoming signals, both requests and responses.
