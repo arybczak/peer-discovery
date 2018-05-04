@@ -24,33 +24,35 @@ bootstrap
   :: PeerDiscovery cm
   -> Node -- ^ Initial peer
   -> IO Bool
-bootstrap pd node = do
-  -- Check if the initial peer is alive.
-  sendRequestSync pd (Ping Nothing) node (return False) $ \Pong -> do
-    readMVar (pdPublicPort pd) >>= \case
-      Nothing   -> return ()
-      Just port -> do
-        -- Check if we're globally reachable on the specified port.
-        reachable <- sendRequestSync pd (Ping $ Just port) node
-          (return False)
-          (\Pong -> return True)
-        -- If we're not, erase the port so we don't pretend in future
-        -- communication that we are.
-        when (not reachable) $ do
-          putStrLn $ "bootstrap: we are not globally reachable on " ++ show port
-          modifyMVarP_ (pdPublicPort pd) (const Nothing)
-    -- We successfully contacted (and thus authenticated) the initial peer, so
-    -- it's safe to insert him into the routing table.
-    modifyMVarP_ (pdRoutingTable pd) $ unsafeInsertPeer (pdConfig pd) node
-    myId <- withMVarP (pdRoutingTable pd) rtId
-    -- Populate our neighbourhood.
-    void $ peerLookup pd myId
-    fix $ \loop -> do
-      targetId <- randomPeerId
-      -- Populate part of the routing table holding nodes far from us.
-      if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
-        then True <$ peerLookup pd targetId
-        else loop
+bootstrap pd node = modifyMVar (pdBootstrapped pd) $ \case
+  True  -> return (True, True)
+  False -> do
+    -- Check if the initial peer is alive.
+    sendRequestSync pd (Ping Nothing) node (return (False, False)) $ \Pong -> do
+      readMVar (pdPublicPort pd) >>= \case
+        Nothing   -> return ()
+        Just port -> do
+          -- Check if we're globally reachable on the specified port.
+          reachable <- sendRequestSync pd (Ping $ Just port) node
+            (return False)
+            (\Pong -> return True)
+          -- If we're not, erase the port so we don't pretend in future
+          -- communication that we are.
+          when (not reachable) $ do
+            putStrLn $ "bootstrap: we are not globally reachable on " ++ show port
+            modifyMVarP_ (pdPublicPort pd) (const Nothing)
+      -- We successfully contacted (and thus authenticated) the initial peer, so
+      -- it's safe to insert him into the routing table.
+      modifyMVarP_ (pdRoutingTable pd) $ unsafeInsertPeer (pdConfig pd) node
+      myId <- withMVarP (pdRoutingTable pd) rtId
+      -- Populate our neighbourhood.
+      void $ peerLookup pd myId
+      fix $ \loop -> do
+        targetId <- randomPeerId
+        -- Populate part of the routing table holding nodes far from us.
+        if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
+          then (True, True) <$ peerLookup pd targetId
+          else loop
 
 ----------------------------------------
 
@@ -245,43 +247,49 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
       -- under his IP address and received port number, so we insert him into
       -- our routing table. In case he lied it's not a big deal, he either won't
       -- make it or will be evicted soon.
-      !table <- case mnode of
-         -- If it comes to nodes who send us requests, we only insert them into
-         -- the table if the highest bit of their id is different than
-         -- ours. This way a potential adversary:
-         --
-         -- 1) Can't directly influence our neighbourhood by flooding us with
-         -- reqeusts from nodes that are close to us.
-         --
-         -- 2) Will have a hard time getting a large influence in our routing
-         -- table because the branch representing different highest bit accounts
-         -- for half of the network, so its buckets will most likely be full.
-         Just node
-           | testPeerIdBit fnPeerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
-             case insertPeer pdConfig node oldTable of
-               Right newTable -> return newTable
-               Left oldNode -> do
-                 -- Either the node address changed or we're dealing with an
-                 -- impersonator, so we only update the address if we don't get
-                 -- a response from the old address and we get a response from
-                 -- the new one. Note that simply pinging the new address is not
-                 -- sufficient, as an impersonator can forward ping request to
-                 -- the existing node and then forward his response back to
-                 -- us. He won't be able to modify the subsequent traffic
-                 -- (because he can't respond to requests on its own as he lacks
-                 -- the appropriate private kay), but he can block it.
-                 sendRequest pd (Ping Nothing) oldNode
-                   (sendRequest pd (Ping Nothing) node
-                     (return ())
-                     (\Pong ->
-                        modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node))
-                   (\Pong -> return ())
-                 return oldTable
-           | otherwise ->
-             -- If the highest bit is the same, we at most reset timeout count
-             -- of the node if it's in our routing table.
-             return $ clearTimeoutPeer node oldTable
-         _ -> return oldTable
+      !table <- readMVar pdBootstrapped >>= \case
+        -- Do not modify routing table until bootstrap was completed. This
+        -- prevents an attacker from spamming us with requests during bootstrap
+        -- phase and possibly gaining large influence in the routing table.
+        False -> return oldTable
+        True  -> case mnode of
+          -- If it comes to nodes who send us requests, we only insert them into
+          -- the table if the highest bit of their id is different than
+          -- ours. This way a potential adversary:
+          --
+          -- 1) Can't directly influence our neighbourhood by flooding us with
+          -- reqeusts from nodes that are close to us.
+          --
+          -- 2) Will have a hard time getting a large influence in our routing
+          -- table because the branch representing different highest bit
+          -- accounts for half of the network, so its buckets will most likely
+          -- be full.
+          Just node
+            | testPeerIdBit fnPeerId 0 /= testPeerIdBit (rtId oldTable) 0 ->
+              case insertPeer pdConfig node oldTable of
+                Right newTable -> return newTable
+                Left oldNode -> do
+                  -- Either the node address changed or we're dealing with an
+                  -- impersonator, so we only update the address if we don't get
+                  -- a response from the old address and we get a response from
+                  -- the new one. Note that simply pinging the new address is
+                  -- not sufficient, as an impersonator can forward ping request
+                  -- to the existing node and then forward his response back to
+                  -- us. He won't be able to modify the subsequent traffic
+                  -- (because he can't respond to requests on its own as he
+                  -- lacks the appropriate private kay), but he can block it.
+                  sendRequest pd (Ping Nothing) oldNode
+                    (sendRequest pd (Ping Nothing) node
+                      (return ())
+                      (\Pong ->
+                         modifyMVarP_ pdRoutingTable $ unsafeInsertPeer pdConfig node))
+                    (\Pong -> return ())
+                  return oldTable
+            | otherwise ->
+              -- If the highest bit is the same, we at most reset timeout count
+              -- of the node if it's in our routing table.
+              return $ clearTimeoutPeer node oldTable
+          _ -> return oldTable
       return (table, findClosest (configK pdConfig) fnTargetId table)
     sendResponse peer $ ReturnNodesR (ReturnNodes peers)
   PingR Ping{..} ->

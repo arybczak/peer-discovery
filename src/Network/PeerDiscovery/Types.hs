@@ -69,7 +69,11 @@ data Config = Config
   , configMaxTimeouts       :: !Int -- ^ Number of acceptable timeouts before
                                     --   eviction from the routing tree.
   , configResponseTimeout   :: !Int -- ^ Response timeout in microseconds.
-  , configSignalQueueSize   :: !Int -- ^ Size of the signal queue.
+  , configSpeedupFactor     :: !Int -- ^ Speedup factor for workers responsible
+                                    -- for network maintenance.
+  , configLookupTries       :: !Int -- ^ The amount of times we try to lookup
+                                    -- peers before concluding that the routing
+                                    -- table is corrupt and resetting its state.
   }
 
 defaultConfig :: Config
@@ -80,7 +84,8 @@ defaultConfig = Config
   , configB                 = 5
   , configMaxTimeouts       = 3
   , configResponseTimeout   = 500000
-  , configSignalQueueSize   = 10000
+  , configSpeedupFactor     = 1
+  , configLookupTries       = 5
   }
 
 ----------------------------------------
@@ -320,6 +325,7 @@ data CommInterface = CommInterface
 -- | Primary object of interest.
 data PeerDiscovery cm = PeerDiscovery
   { pdBindAddr         :: !Peer
+  , pdBootstrapped     :: !(MVar Bool)
   , pdPublicPort       :: !(MVar (Maybe PortNumber))
   , pdPublicKey        :: !C.PublicKey
   , pdSecretKey        :: !C.SecretKey
