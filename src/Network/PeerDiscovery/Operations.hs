@@ -58,7 +58,7 @@ bootstrap pd node = modifyMVar (pdBootstrapped pd) $ \case
 
 -- | Post-processed response of a 'FindNode' request.
 data Reply = Success !Node !ReturnNodes
-           | Failure !Integer !Node
+           | Failure !Distance !Node
 
 -- | Perform Kademlia peer lookup operation and return up to k live peers
 -- closest to a target id.
@@ -93,8 +93,8 @@ peerLookup pd@PeerDiscovery{..} targetId = do
   where
     outerLoop
       :: TQueue Reply
-      -> M.Map Integer Node
-      -> MVar (M.Map Integer Node)
+      -> M.Map Distance Node
+      -> MVar (M.Map Distance Node)
       -> S.Set PeerId
       -> IO [Node]
     outerLoop queue closest queried failed = do
@@ -125,10 +125,10 @@ peerLookup pd@PeerDiscovery{..} targetId = do
     -- query to send them FindNode requests and mark them as queried so parallel
     -- lookups will not select them as we want routing paths to be disjoint.
     peersToQuery
-      :: MVar (M.Map Integer Node)
+      :: MVar (M.Map Distance Node)
       -> Int
-      -> M.Map Integer Node
-      -> IO ([(Integer, Node)])
+      -> M.Map Distance Node
+      -> IO ([(Distance, Node)])
     peersToQuery mvQueried n closest = modifyMVarP mvQueried $ \queried ->
       let chosen = M.take n $ (M.take (configK pdConfig) closest) M.\\ queried
       in (queried `M.union` chosen, M.toList chosen)
@@ -137,7 +137,7 @@ peerLookup pd@PeerDiscovery{..} targetId = do
     -- responses in a queue so we can synchronously process them as they come.
     sendFindNodeRequests
       :: TQueue Reply
-      -> [(Integer, Node)]
+      -> [(Distance, Node)]
       -> IO ()
     sendFindNodeRequests queue peers = do
       publicPort <- readMVar pdPublicPort
@@ -156,18 +156,18 @@ peerLookup pd@PeerDiscovery{..} targetId = do
 
     processResponses
       :: TQueue Reply
-      -> MVar (M.Map Integer Node)
+      -> MVar (M.Map Distance Node)
       -> Int
-      -> M.Map Integer Node
+      -> M.Map Distance Node
       -> S.Set PeerId
-      -> IO (M.Map Integer Node, S.Set PeerId)
+      -> IO (M.Map Distance Node, S.Set PeerId)
     processResponses queue queried = innerLoop
       where
         innerLoop
           :: Int
-          -> M.Map Integer Node
+          -> M.Map Distance Node
           -> S.Set PeerId
-          -> IO (M.Map Integer Node, S.Set PeerId)
+          -> IO (M.Map Distance Node, S.Set PeerId)
         innerLoop pending closest failed = case pending of
           -- If there are no more pending replies, we completed the round.
           0 -> return (closest, failed)
@@ -207,9 +207,9 @@ peerLookup pd@PeerDiscovery{..} targetId = do
 
         updateClosestWith
           :: S.Set PeerId
-          -> M.Map Integer Node
+          -> M.Map Distance Node
           -> [Node]
-          -> M.Map Integer Node
+          -> M.Map Distance Node
         updateClosestWith failed closest =
           -- We need to keep more than k peers on the list. If we keep k, then
           -- the following might happen: we're in the middle of the lookup, we

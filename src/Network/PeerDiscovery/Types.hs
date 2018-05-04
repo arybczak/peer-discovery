@@ -11,6 +11,7 @@ module Network.PeerDiscovery.Types
   , peerIdBitSize
   , randomPeerId
   , testPeerIdBit
+  , Distance(..)
   , distance
     -- * RpcId
   , RpcId
@@ -140,9 +141,15 @@ randomPeerId = PeerId . mkInteger <$> C.getRandomBytes (peerIdBitSize `quot` 8)
 testPeerIdBit :: PeerId -> Int -> Bool
 testPeerIdBit (PeerId n) k = testBit n (peerIdBitSize - k - 1)
 
+-- | Representation of a distance between two peers. It's worth noting that for
+-- a peer A any other peer B is uniquely determined by its distance from A (this
+-- property is used in 'peerLookup').
+newtype Distance = Distance Integer
+  deriving (Eq, Ord, Show)
+
 -- | Calculate distance between two peers using xor metric.
-distance :: PeerId -> PeerId -> Integer
-distance (PeerId a) (PeerId b) = a `xor` b
+distance :: PeerId -> PeerId -> Distance
+distance (PeerId a) (PeerId b) = Distance (a `xor` b)
 
 ----------------------------------------
 
