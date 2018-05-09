@@ -1,7 +1,7 @@
 {-# LANGUAGE RankNTypes #-}
 module Network.PeerDiscovery
   ( withPeerDiscovery
-  , getPeers
+  , findPeers
   ) where
 
 import Control.Concurrent
@@ -47,8 +47,8 @@ withPeerDiscovery pdConfig joinNetwork mskey commMethod port k = do
 -- times, we assume that the routing table is corrupted. We then reset its
 -- state, return empty list and require that 'bootstrap' is called to repopulate
 -- the routing table.
-getPeers :: PeerDiscovery cm -> IO [Peer]
-getPeers pd@PeerDiscovery{..} = loop (configLookupTries pdConfig)
+findPeers :: PeerDiscovery cm -> IO [Peer]
+findPeers pd@PeerDiscovery{..} = loop (configLookupTries pdConfig)
   where
     loop :: Int -> IO [Peer]
     loop 0 = do
