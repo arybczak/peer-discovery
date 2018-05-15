@@ -79,7 +79,7 @@ matchSize requested label actual = when (actual /= requested) $ do
 ----------------------------------------
 
 withMVarP :: MVar a -> (a -> r) -> IO r
-withMVarP mv f = withMVar mv $ return . f
+withMVarP mv f = f <$> readMVar mv
 
 -- | Strictly apply a pure function to contents of MVar and return a result.
 modifyMVarP :: MVar a -> (a -> (a, r)) -> IO r
