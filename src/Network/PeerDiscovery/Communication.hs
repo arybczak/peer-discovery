@@ -110,27 +110,35 @@ sendRequestSync pd reqType peer onFailure onSuccess = do
 -- | Handle 'Response' signals by looking up and running appropriate handler
 -- that was registered when a 'Request' was sent.
 handleResponse
-  :: ResponseHandlers
+  :: PeerDiscovery cm
   -> Peer        -- ^ Address of the responder
   -> RpcId       -- ^ Id of the request/response
   -> C.PublicKey -- ^ Public key of the responder
   -> C.Signature -- ^ Signature of the id, request and response
   -> Response
   -> IO ()
-handleResponse responseHandlers peer rpcId pkey signature rsp = do
+handleResponse PeerDiscovery{..} peer rpcId pkey signature rsp = do
   retrieveHandler >>= \case
     Nothing      -> putStrLn $ "handleResponse: no handler for " ++ show rpcId
     Just handler -> case rsp of
-      ReturnNodesR returnPeers -> runHandler handler returnPeers
-      PongR pong               -> runHandler handler pong
+      ReturnNodesR returnPeers@(ReturnNodes nodes) ->
+        -- We require that length of the list is not longer than configK.
+        runHandler handler returnPeers (length nodes <= configK pdConfig)
+      PongR pong ->
+        runHandler handler pong True
   where
-    retrieveHandler = modifyMVarP responseHandlers $ \handlers ->
+    retrieveHandler = modifyMVarP pdResponseHandlers $ \handlers ->
       case M.lookup rpcId handlers of
         Just handler -> (M.delete rpcId handlers, Just handler)
         Nothing      -> (handlers, Nothing)
 
-    runHandler :: forall a. Typeable a => ResponseHandler -> a -> IO ()
-    runHandler ResponseHandler{..} a = do
+    runHandler
+      :: forall response. Typeable response
+      => ResponseHandler
+      -> response
+      -> Bool
+      -> IO ()
+    runHandler ResponseHandler{..} response responseValid = do
       killThread rhTimeoutHandlerId
       if | node /= rhRecipient -> do
              putStrLn $ "handleResponse: response recipient " ++ show rhRecipient
@@ -139,20 +147,23 @@ handleResponse responseHandlers peer rpcId pkey signature rsp = do
          | not $ C.verify pkey (toMessage rpcId rhRequest rsp) signature -> do
              putStrLn $ "handleResponse: signature verification failed"
              rhOnFailure
-         | otherwise -> case rhHandler <$> cast a of
+         | responseValid -> case rhHandler <$> cast response of
              Just run -> run
              Nothing  -> do
                putStrLn $ "handleResponse: expected response of type "
                         ++ show (typeOf (argOf rhHandler)) ++ ", but got "
-                        ++ show (typeOf a) ++ " for " ++ show rpcId
+                        ++ show (typeOf response) ++ " for " ++ show rpcId
                rhOnFailure
+         | otherwise -> do
+             putStrLn $ "handleResponse: validation of response failed"
+             rhOnFailure
       where
         node = Node { nodeId   = mkPeerId pkey
                     , nodePeer = peer
                     }
 
         argOf :: (r -> IO ()) -> r
-        argOf _ = error "handleResponse.arg"
+        argOf _ = error "handleResponse.argOf"
 
 ----------------------------------------
 

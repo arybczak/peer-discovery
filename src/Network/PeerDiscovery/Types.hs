@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveTraversable #-}
 module Network.PeerDiscovery.Types
   ( -- * Config
     Config(..)
@@ -24,6 +25,7 @@ module Network.PeerDiscovery.Types
   , NodeInfo(..)
   , RoutingTable(..)
   , RoutingTree(..)
+  , Bucket(..)
     -- * Request
   , Request(..)
   , FindNode(..)
@@ -67,11 +69,12 @@ data Config = Config
   , configK                 :: !Int -- ^ Bucket size.
   , configD                 :: !Int -- ^ Number of distinct lookup paths.
   , configB                 :: !Int -- ^ Maximum depth of the routing tree.
+  , configCacheSize         :: !Int -- ^ Size of the bucket replacement cache.
   , configMaxTimeouts       :: !Int -- ^ Number of acceptable timeouts before
                                     --   eviction from the routing tree.
   , configResponseTimeout   :: !Int -- ^ Response timeout in microseconds.
-  , configSpeedupFactor     :: !Int -- ^ Speedup factor for workers responsible
-                                    -- for network maintenance.
+  , configSpeedupFactor     :: !Int -- ^ Speedup factor for worker responsible
+                                    -- for maintenance of the routing table.
   , configLookupTries       :: !Int -- ^ The amount of times we try to lookup
                                     -- peers before concluding that the routing
                                     -- table is corrupt and resetting its state.
@@ -83,7 +86,8 @@ defaultConfig = Config
   , configK                 = 16
   , configD                 = 8
   , configB                 = 5
-  , configMaxTimeouts       = 3
+  , configCacheSize         = 5
+  , configMaxTimeouts       = 5
   , configResponseTimeout   = 500000
   , configSpeedupFactor     = 1
   , configLookupTries       = 5
@@ -197,19 +201,24 @@ instance Serialise Node where
 
 -- | 'Node' along with additional info for 'RoutingTable'.
 data NodeInfo = NodeInfo
-  { niNode         :: !Node
-  , niTimeoutCount :: !Int
+  { niNode          :: !Node
+  , niTimeoutCount  :: !Int
   } deriving (Eq, Show)
 
 -- | Routing table.
 data RoutingTable = RoutingTable
   { rtId     :: !PeerId
-  , rtTree   :: !RoutingTree
+  , rtTree   :: !(RoutingTree Bucket)
   } deriving (Eq, Show)
 
-data RoutingTree = Bucket !(S.Seq NodeInfo)
-                 | Split {- 1 -} !RoutingTree {- 0 -} !RoutingTree
-  deriving (Eq, Show)
+data RoutingTree a = Leaf !a
+                   | Split {- 1 -} !(RoutingTree a) {- 0 -} !(RoutingTree a)
+  deriving (Eq, Show, Functor, Foldable, Traversable)
+
+data Bucket = Bucket
+  { bucketNodes :: !(S.Seq NodeInfo)
+  , bucketCache :: ![Node]
+  } deriving (Eq, Show)
 
 ----------------------------------------
 

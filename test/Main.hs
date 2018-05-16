@@ -109,3 +109,5 @@ main = withStmRouter $ \router -> do
 
     pPrint . map (\x -> let d = distance targetId (nodeId x) in (length (show d), d, x))
       =<< peerLookup pd1 targetId
+
+    void getLine

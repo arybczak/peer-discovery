@@ -148,11 +148,7 @@ peerLookup pd@PeerDiscovery{..} targetId = do
                               }
       forM_ peers $ \(targetDist, peer) -> sendRequest pd findNode peer
         (atomically . writeTQueue queue $ Failure targetDist peer)
-        (\response@(ReturnNodes nodes) ->
-           -- Do not accept responses with more than k nodes.
-           atomically . writeTQueue queue $! if length nodes <= configK pdConfig
-                                             then Success peer response
-                                             else Failure targetDist peer)
+        (atomically . writeTQueue queue . Success peer)
 
     processResponses
       :: TQueue Reply

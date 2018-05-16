@@ -3,11 +3,14 @@ module Network.PeerDiscovery.Routing
   , insertPeer
   , unsafeInsertPeer
   , timeoutPeer
+  , timeoutPeerBucket
   , clearTimeoutPeer
+  , clearTimeoutPeerBucket
   , findClosest
   ) where
 
 import Data.Functor.Identity
+import Data.List
 import qualified Data.Foldable as F
 import qualified Data.Sequence as S
 
@@ -18,7 +21,7 @@ import Network.PeerDiscovery.Util
 initRoutingTable :: PeerId -> RoutingTable
 initRoutingTable peerId =
   RoutingTable { rtId   = peerId
-               , rtTree = Bucket S.empty
+               , rtTree = Leaf (Bucket S.empty [])
                }
 
 -- | Insert a peer into the routing table. If a peer with the same identifier,
@@ -50,16 +53,28 @@ unsafeInsertPeer conf peer = runIdentity . insertPeerImpl f conf peer
 timeoutPeer :: Node -> RoutingTable -> RoutingTable
 timeoutPeer = modifyTimeoutCount (+1)
 
+-- | Increase the timeout count of a given peer in a specific bucket by 1.
+timeoutPeerBucket :: Node -> Bucket -> Bucket
+timeoutPeerBucket = modifyTimeoutCountBucket (+1)
+
 -- | Reset the timeout count of a given peer.
 clearTimeoutPeer :: Node -> RoutingTable -> RoutingTable
 clearTimeoutPeer = modifyTimeoutCount (const 0)
+
+-- | Reset the timeout count of a given peer in a specific bucket.
+clearTimeoutPeerBucket :: Node -> Bucket -> Bucket
+clearTimeoutPeerBucket = modifyTimeoutCountBucket (const 0)
 
 -- | Return up to k peers closest to the target id.
 findClosest :: Int -> PeerId -> RoutingTable -> [Node]
 findClosest n nid = F.foldr (\node acc -> niNode node : acc) [] . go n 0 . rtTree
   where
     go k !depth = \case
-      Bucket nodes     -> S.take k nodes
+      Leaf Bucket{..}  ->
+        -- Some of these might be timed out, but we don't care, we have a whole
+        -- bucket of them for the sake of redundancy. The only possible time for
+        -- all of them to be timed out is network failure.
+        S.take k bucketNodes
       Split left right ->
         let bitSet  = testPeerIdBit nid depth
             nodes   = if bitSet
@@ -94,33 +109,39 @@ insertPeerImpl updateExistingNode conf peer rt =
                     , niTimeoutCount = 0
                     }
 
-    go :: Bool -> Int -> RoutingTree -> f RoutingTree
+    go :: Bool -> Int -> (RoutingTree Bucket) -> f (RoutingTree Bucket)
     go !myBranch !depth = \case
-      tree@(Bucket nodes) ->
+      Leaf (Bucket nodes cache)->
         case S.findIndexL ((== nodeId peer) . nodeId . niNode) nodes of
           -- If the node is already there, appropriately update it.
-          Just nodeIdx -> Bucket <$> updateExistingNode node nodeIdx nodes
+          Just nodeIdx -> Leaf
+            <$> (Bucket <$> updateExistingNode node nodeIdx nodes <*> pure cache)
           Nothing -> if
             | S.length nodes < configK conf ->
               -- If there is a place in the bucket, simply insert it at the
               -- head.
-              pure . Bucket $ node S.<| nodes
+              pure . Leaf $ Bucket (node S.<| nodes) cache
             | myBranch || depth `rem` configB conf /= 0 ->
               -- If we are in a branch that represents prefix of our id or the
               -- condition taken from the original Kademlia paper (section 4.2)
               -- is met, split existing bucket into two and recursively select
               -- the appropriate one.
-              let (left, right) = S.partition ((`testPeerIdBit` depth) . nodeId . niNode)
-                                                nodes
-              in go myBranch depth $ Split (Bucket left) (Bucket right)
-            | otherwise ->
+              let testBit          = (`testPeerIdBit` depth) . nodeId
+                  (left, right)    = S.partition (testBit . niNode) nodes
+                  (lCache, rCache) = partition testBit cache
+              in go myBranch depth $ Split (Leaf $ Bucket left lCache)
+                                           (Leaf $ Bucket right rCache)
+            | otherwise -> pure . Leaf $
               -- If the bucket is full and we're at max depth, check if it
-              -- contains stale nodes. If so, replace one of them.
+              -- contains stale nodes. If so, replace one of them. We search
+              -- from the right as that's where nodes seen the least
+              -- are. Otherwise we insert the node into the replacement cache.
               case S.findIndexR ((> configMaxTimeouts conf) . niTimeoutCount) nodes of
-                Just nodeIdx -> pure . Bucket $ node S.<| S.deleteAt nodeIdx nodes
-                Nothing      -> pure tree
+                Just nodeIdx -> Bucket (node S.<| S.deleteAt nodeIdx nodes) cache
+                Nothing      -> Bucket nodes $
+                  peer : take (configCacheSize conf - 1) (delete peer cache)
       Split left right ->
-        let peerBit = testPeerIdBit (nodeId $ niNode node) depth
+        let peerBit = testPeerIdBit (nodeId peer) depth
             myBit   = testPeerIdBit (rtId rt) depth
             -- Check whether the branch we're going to extends our id prefix.
             nextMyBranch = myBranch && myBit == peerBit
@@ -132,13 +153,16 @@ modifyTimeoutCount :: (Int -> Int) -> Node -> RoutingTable -> RoutingTable
 modifyTimeoutCount modify peer rt = rt { rtTree = go 0 (rtTree rt) }
   where
     go !depth = \case
-      tree@(Bucket nodes) ->
-        case S.findIndexR ((== peer) . niNode) nodes of
-          Just nodeIdx ->
-            let f node = node { niTimeoutCount = modify (niTimeoutCount node) }
-            in Bucket $ S.adjust' f nodeIdx nodes
-          Nothing -> tree
+      Leaf bucket      -> Leaf $ modifyTimeoutCountBucket modify peer bucket
       Split left right ->
         if testPeerIdBit (nodeId peer) depth
         then Split (go (depth + 1) left) right
         else Split left (go (depth + 1) right)
+
+modifyTimeoutCountBucket :: (Int -> Int) -> Node -> Bucket -> Bucket
+modifyTimeoutCountBucket modify peer tree@(Bucket nodes cache) =
+  case S.findIndexR ((== peer) . niNode) nodes of
+    Just nodeIdx ->
+      let f node = node { niTimeoutCount = modify (niTimeoutCount node) }
+      in Bucket (S.adjust' f nodeIdx nodes) cache
+    Nothing -> tree
