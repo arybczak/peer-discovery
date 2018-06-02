@@ -9,7 +9,7 @@ module Network.PeerDiscovery.Communication.Method
   , withStmRouter
   ) where
 
-import Control.Concurrent.Async
+import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Exception
 import Control.Monad
@@ -69,66 +69,44 @@ udpSocket mhost port k = do
 ----------------------------------------
 
 -- | STM-based router for testing purposes.
-data StmRouter = StmRouter
-  { routerIncoming :: !(TQueue IncomingMsg)
-  , routerOutgoing :: !(TVar (M.Map Peer (TQueue (Peer, Signal))))
-  }
-
-data IncomingMsg = IncomingMsg
-  { msgSignal :: !Signal
-  , msgSource :: !Peer
-  , msgDest   :: !Peer
+newtype StmRouter = StmRouter
+  { routerRoutes :: MVar (M.Map Peer (TQueue (Peer, Signal)))
   }
 
 -- | Construct new 'StmRouter' for use in the continuation.
 withStmRouter :: (StmRouter -> IO r) -> IO r
-withStmRouter k = do
-  router <- StmRouter <$> newTQueueIO <*> newTVarIO M.empty
-  withAsync (doRouting router) $ \_ -> k router
-  where
-    doRouting StmRouter{..} = fix $ \loop -> join . atomically $ do
-      IncomingMsg{..} <- readTQueue routerIncoming
-      routes <- readTVar routerOutgoing
-      case msgDest `M.lookup` routes of
-        Just route -> do
-          writeTQueue route (msgSource, msgSignal)
-          return loop
-        Nothing -> return $ do
-          putStrLn $ "doRouting: no route to " ++ show msgDest
-                  ++ ", discarding message"
-          loop
+withStmRouter k = k . StmRouter =<< newMVar M.empty
 
 -- | Construct communication method based on 'StmRouter'.
 stmRouter :: StmRouter -> CommunicationMethod StmRouter
 stmRouter StmRouter{..} port k = bracket register unregister $ \route ->
   k peer $ CommInterface
-    { recvFrom = atomically $ readTQueue route
-    , sendTo   = \dest signal -> atomically $ do
-        writeTQueue routerIncoming $ IncomingMsg { msgSignal = signal
-                                                 , msgSource = peer
-                                                 , msgDest   = dest
-                                                 }
-    }
+     { recvFrom = atomically $ readTQueue route
+     , sendTo   = \dest signal -> readMVar routerRoutes >>= \routes -> do
+         case dest `M.lookup` routes of
+           Just destRoute -> atomically $ writeTQueue destRoute (peer, signal)
+           Nothing        -> putStrLn $ "sendTo (" ++ show peer
+                                     ++ "): no route to " ++ show dest
+                                     ++ ", discarding message"
+     }
   where
     peer = Peer 0 port
 
-    register = atomically $ do
-      routes <- readTVar routerOutgoing
+    register = modifyMVar routerRoutes $ \routes -> do
       if peer `M.member` routes
         then error $ "register: route to " ++ show peer ++ " already exists"
         else do
-          route <- newTQueue
-          writeTVar routerOutgoing $! M.insert peer route routes
-          return route
+          route <- newTQueueIO
+          return . (, route) $! M.insert peer route routes
 
-    unregister route = join . atomically $ do
-      routes <- readTVar routerOutgoing
+    unregister route = modifyMVar_ routerRoutes $ \routes -> do
       case peer `M.lookup` routes of
-        Nothing -> return . putStrLn $ "unregister: no route to " ++ show peer
+        Nothing -> do
+          putStrLn $ "unregister: no route to " ++ show peer
+          return routes
         Just route'
-          | route == route' -> do
-              writeTVar routerOutgoing $! M.delete peer routes
-              return $ return ()
-          | otherwise -> return $ do
+          | route == route' -> return $! M.delete peer routes
+          | otherwise -> do
               putStrLn $ "unregister: route to " ++ show peer
                       ++ " is different than expected"
+              return routes
