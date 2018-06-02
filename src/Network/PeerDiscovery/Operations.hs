@@ -2,6 +2,7 @@ module Network.PeerDiscovery.Operations
   ( bootstrap
   , peerLookup
   , handleRequest
+  , performRoutingTableMaintenance
   ) where
 
 import Control.Arrow ((&&&))
@@ -10,10 +11,14 @@ import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Monad
 import Data.Function
+import Data.Maybe
 import Prelude
 import qualified Crypto.PubKey.Ed25519 as C
+import qualified Data.Foldable as F
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
+import qualified Data.Sequence as Seq
+import qualified Data.Traversable as F
 
 import Network.PeerDiscovery.Communication
 import Network.PeerDiscovery.Routing
@@ -306,3 +311,97 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
     sendResponse receiver rsp =
       let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId req rsp)
       in sendTo pdCommInterface receiver $ Response rpcId pdPublicKey signature rsp
+
+-- | Perform routing table maintenance by testing connectivity of
+-- nodes that failed to respond to FindNode request by periodically
+-- sending them subsequent, random FindNode requests (note that we
+-- can't use Ping requests for that as in principle a node might
+-- ignore all FindNode requests, but respond to Ping request and
+-- occupy a space in our routing table while being useless).
+--
+-- If any of them consecutively fails to respond a specific number of
+-- times, we then check whether the replacement cache of the
+-- corresponding bucket is not empty and replace the node in question
+-- with the first node from the cache that responds (if replacement
+-- cache is empty, we leave the node be).
+--
+-- Note that the whole maintenance process is strategically
+-- constructed so that in case of network failure (i.e. no node
+-- responds to requests) we don't change the structure of any bucket
+-- (apart from increasing timeout counts of nodes).
+performRoutingTableMaintenance :: PeerDiscovery cm -> IO ()
+performRoutingTableMaintenance pd@PeerDiscovery{..} = do
+  findNode <- do
+    myId <- withMVarP pdRoutingTable rtId
+    port <- readMVar pdPublicPort
+    return $ \nid -> FindNode { fnPeerId     = myId
+                              , fnPublicPort = port
+                              , fnTargetId   = nid
+                              }
+  modifyMVar_ pdRoutingTable $ \table -> do
+    -- TODO: might use forConcurrently here to speed things up.
+    tree <- F.forM (rtTree table) $ \bucket -> do
+      queue <- newTQueueIO
+      let timedout = Seq.foldrWithIndex
+            (\i ni acc -> if niTimeoutCount ni > 0
+                          then (i, ni) : acc
+                          else           acc)
+            []
+            (bucketNodes bucket)
+      F.forM_ timedout $ \(i, ni@NodeInfo{..}) -> do
+        targetId <- randomPeerId
+        sendRequest pd (findNode targetId) niNode
+          (      atomically $ writeTQueue queue (i, ni, False))
+          (\_ -> atomically $ writeTQueue queue (i, ni, True))
+      updateBucket findNode queue (length timedout) bucket Nothing
+    return table { rtTree = tree }
+  where
+    updateBucket
+      :: (PeerId -> FindNode)
+      -> TQueue (Int, NodeInfo, Bool)
+      -> Int
+      -> Bucket
+      -> Maybe [(Node, Bool)]
+      -> IO Bucket
+    updateBucket _ _ 0 bucket mcache = case mcache of
+      -- If there were no attempts to ping the cache, no node timed out enough
+      -- times to be considered for eviction, so just return the updated bucket.
+      Nothing -> return bucket
+      -- If some nodes timed out enough times to be considered for eviction,
+      -- replace the old cache. We ignore whether nodes in cache were alive or
+      -- not as it doesn't matter; they will either be ignored during the next
+      -- iteration or replaced by new incoming nodes.
+      Just cache -> return bucket { bucketCache = map fst cache }
+    updateBucket findNode queue k bucket mcache = do
+      (i, NodeInfo{..}, respondedCorrectly) <- atomically $ readTQueue queue
+      if | respondedCorrectly -> updateBucket findNode queue (k - 1)
+                                              (clearTimeoutPeerBucket niNode bucket)
+                                              mcache
+         | niTimeoutCount >= configMaxTimeouts pdConfig -> do
+             cache <- case mcache of
+               Just cache -> return cache
+               Nothing    -> forConcurrently (bucketCache bucket) $ \node -> do
+                 targetId <- randomPeerId
+                 (node, ) <$> sendRequestSync pd (findNode targetId) node
+                   (      return False)
+                   (\_ -> return True)
+             case break snd cache of
+               (dead, (alive, _) : rest) ->
+                 -- Pick the first alive node in the cache and replace the dead
+                 -- one in the bucket with it.
+                 let newNodeInfo = NodeInfo
+                       { niNode         = alive
+                       , niTimeoutCount = 0
+                       }
+                     newBucket = bucket
+                       { bucketNodes = Seq.update i newNodeInfo (bucketNodes bucket)
+                       }
+                 in updateBucket findNode queue (k - 1) newBucket $ Just (dead ++ rest)
+               (_dead, []) ->
+                 -- All nodes in the replacement cache are dead - most likely
+                 -- explanation is network failure, so we don't do anything in
+                 -- this case.
+                 updateBucket findNode queue (k - 1) bucket (Just cache)
+         | otherwise -> updateBucket findNode queue (k - 1)
+                                     (timeoutPeerBucket niNode bucket)
+                                     mcache
