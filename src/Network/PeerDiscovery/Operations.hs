@@ -259,10 +259,10 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
       -- our routing table. In case he lied it's not a big deal, he either won't
       -- make it or will be evicted soon.
       !table <- atomically (readTVar pdBootstrapState) >>= \case
-        -- Do not modify the routing table until bootstrap was
-        -- completed. This prevents an attacker from spamming us with
-        -- requests before or during bootstrap phase and possibly
-        -- gaining large influence in the routing table.
+        -- Do not modify the routing table until bootstrap was completed. This
+        -- prevents an attacker from spamming us with requests before or during
+        -- bootstrap phase and possibly gaining large influence in the routing
+        -- table.
         BootstrapNeeded     -> return oldTable
         BootstrapInProgress -> return oldTable
         BootstrapDone       -> case mnode of
@@ -314,23 +314,22 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
       let signature = C.sign pdSecretKey pdPublicKey (toMessage rpcId req rsp)
       in sendTo pdCommInterface receiver $ Response rpcId pdPublicKey signature rsp
 
--- | Perform routing table maintenance by testing connectivity of
--- nodes that failed to respond to FindNode request by periodically
--- sending them subsequent, random FindNode requests (note that we
--- can't use Ping requests for that as in principle a node might
--- ignore all FindNode requests, but respond to Ping request and
--- occupy a space in our routing table while being useless).
+-- | Perform routing table maintenance by testing connectivity of nodes that
+-- failed to respond to FindNode request by periodically sending them
+-- subsequent, random FindNode requests (note that we can't use Ping requests
+-- for that as in principle a node might ignore all FindNode requests, but
+-- respond to Ping request and occupy a space in our routing table while being
+-- useless).
 --
--- If any of them consecutively fails to respond a specific number of
--- times, we then check whether the replacement cache of the
--- corresponding bucket is not empty and replace the node in question
--- with the first node from the cache that responds (if replacement
--- cache is empty, we leave the node be).
+-- If any of them consecutively fails to respond a specific number of times, we
+-- then check whether the replacement cache of the corresponding bucket is not
+-- empty and replace the node in question with the first node from the cache
+-- that responds (if replacement cache is empty, we leave the node be).
 --
--- Note that the whole maintenance process is strategically
--- constructed so that in case of network failure (i.e. no node
--- responds to requests) we don't change the structure of any bucket
--- (apart from increasing timeout counts of nodes).
+-- Note that the whole maintenance process is strategically constructed so that
+-- in case of network failure (i.e. no node responds to requests) we don't
+-- change the structure of any bucket (apart from increasing timeout counts of
+-- nodes).
 performRoutingTableMaintenance :: PeerDiscovery cm -> IO ()
 performRoutingTableMaintenance pd@PeerDiscovery{..} = do
   findNode <- do

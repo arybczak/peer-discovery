@@ -45,9 +45,9 @@ withPeerDiscovery pdConfig joinNetwork mskey commMethod port k = do
      $ \_ -> withAsync (dispatcher pd)
      $ \_ -> k pd
 
--- | Find peers to connect to. If peer lookup fails a subsequent
--- number of times, an empty list is returned. This indicates a
--- network failure or that the routing table is somehow corrupted.
+-- | Find peers to connect to. If peer lookup fails a subsequent number of
+-- times, an empty list is returned. This indicates a network failure or that
+-- the routing table is somehow corrupted.
 findPeers :: PeerDiscovery cm -> IO [Peer]
 findPeers pd@PeerDiscovery{..} = loop (configLookupTries pdConfig)
   where

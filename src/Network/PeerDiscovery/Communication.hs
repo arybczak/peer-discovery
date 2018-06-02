@@ -71,8 +71,8 @@ sendRequest pd reqType peer onFailure onSuccess = do
                                   , rhHandler          = onSuccess
                                   }
     return $! M.insert rpcId handler handlers
-  -- Send the request after the response handler was put in place to
-  -- make sure that the response is not received before.
+  -- Send the request after the response handler was put in place to make sure
+  -- that the response is not received before.
   sendTo (pdCommInterface pd) (nodePeer peer) (Request rpcId request)
   where
     timeoutHandler rpcId = do

@@ -19,8 +19,8 @@ refresher pd@PeerDiscovery{..} = forever $ do
     BootstrapNeeded     -> retry
     BootstrapInProgress -> retry
     BootstrapDone       -> return $ do
-      -- Before we do routing table maintenance, perform random peer
-      -- lookup in order to refresh the routing table a bit.
+      -- Before we do routing table maintenance, perform random peer lookup in
+      -- order to refresh the routing table a bit.
       void $ peerLookup pd =<< randomPeerId
       performRoutingTableMaintenance pd
   where
