@@ -54,6 +54,7 @@ import Data.Functor.Identity
 import Data.Monoid
 import Data.Typeable
 import Network.Socket
+import Prelude
 import qualified Crypto.Hash as H
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Crypto.Random as C

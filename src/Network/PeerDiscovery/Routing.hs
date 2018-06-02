@@ -11,6 +11,7 @@ module Network.PeerDiscovery.Routing
 
 import Data.Functor.Identity
 import Data.List
+import Prelude
 import qualified Data.Foldable as F
 import qualified Data.Sequence as S
 

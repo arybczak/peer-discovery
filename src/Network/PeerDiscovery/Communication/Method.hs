@@ -15,6 +15,7 @@ import Control.Exception
 import Control.Monad
 import Data.Function
 import Network.Socket hiding (recvFrom, sendTo)
+import Prelude
 import qualified Data.Map.Strict as M
 import qualified Network.Socket.ByteString as S
 

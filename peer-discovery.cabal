@@ -44,6 +44,7 @@ library
                        GeneralizedNewtypeDeriving,
                        LambdaCase,
                        MultiWayIf,
+                       NoImplicitPrelude,
                        RecordWildCards,
                        ScopedTypeVariables,
                        TupleSections,
@@ -70,6 +71,7 @@ executable peer-discovery-test
   default-extensions:  BangPatterns
                        LambdaCase,
                        MultiWayIf,
+                       NoImplicitPrelude,
                        RecordWildCards,
                        ScopedTypeVariables,
                        TupleSections,

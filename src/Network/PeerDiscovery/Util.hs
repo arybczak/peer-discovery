@@ -27,6 +27,7 @@ import Control.Monad
 import Data.Bits
 import Data.Word
 import Network.Socket
+import Prelude
 import System.Random.Shuffle
 import qualified Crypto.Error as C
 import qualified Crypto.PubKey.Ed25519 as C

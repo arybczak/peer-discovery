@@ -8,6 +8,7 @@ import Control.Concurrent.Async
 import Control.Concurrent.STM
 import Control.Monad
 import Data.Maybe
+import Prelude
 import qualified Data.Sequence as S
 import qualified Data.Foldable as F
 import qualified Data.Traversable as F

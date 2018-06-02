@@ -8,6 +8,7 @@ import Control.Concurrent
 import Control.Concurrent.Async
 import Control.Monad
 import Network.Socket hiding (recvFrom, sendTo)
+import Prelude
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.Map.Strict as M
 

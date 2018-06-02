@@ -9,6 +9,7 @@ import Control.Concurrent
 import Control.Monad
 import Data.Monoid
 import Data.Typeable
+import Prelude
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.ByteString as BS
 import qualified Data.Map.Strict as M

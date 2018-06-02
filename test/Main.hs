@@ -3,6 +3,7 @@ module Main where
 import Control.Concurrent
 import Control.Monad
 import Network.Socket
+import Prelude
 import System.Random
 import Text.Pretty.Simple
 import qualified Crypto.Error as C

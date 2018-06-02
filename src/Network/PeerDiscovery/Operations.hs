@@ -10,6 +10,7 @@ import Control.Concurrent.MVar
 import Control.Concurrent.STM
 import Control.Monad
 import Data.Function
+import Prelude
 import qualified Crypto.PubKey.Ed25519 as C
 import qualified Data.Map.Strict as M
 import qualified Data.Set as S
