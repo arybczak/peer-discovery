@@ -259,10 +259,13 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
       -- our routing table. In case he lied it's not a big deal, he either won't
       -- make it or will be evicted soon.
       !table <- atomically (readTVar pdBootstrapState) >>= \case
-        -- Do not modify routing table until bootstrap was completed. This
-        -- prevents an attacker from spamming us with requests during bootstrap
-        -- phase and possibly gaining large influence in the routing table.
-        BootstrapDone -> case mnode of
+        -- Do not modify the routing table until bootstrap was
+        -- completed. This prevents an attacker from spamming us with
+        -- requests before or during bootstrap phase and possibly
+        -- gaining large influence in the routing table.
+        BootstrapNeeded     -> return oldTable
+        BootstrapInProgress -> return oldTable
+        BootstrapDone       -> case mnode of
           -- If it comes to nodes who send us requests, we only insert them into
           -- the table if the highest bit of their id is different than
           -- ours. This way a potential adversary:
@@ -300,7 +303,6 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
               -- of the node if it's in our routing table.
               return $ clearTimeoutPeer node oldTable
           _ -> return oldTable
-        _ -> return oldTable
       return (table, findClosest (configK pdConfig) fnTargetId table)
     sendResponse peer $ ReturnNodesR (ReturnNodes peers)
   PingR Ping{..} ->
