@@ -61,9 +61,7 @@ sendRequest
 sendRequest pd reqType peer onFailure onSuccess = do
   rpcId <- randomRpcId
   let request = toRequest reqType
-      signal  = Request rpcId request
   modifyMVar_ (pdResponseHandlers pd) $ \handlers -> do
-    sendTo (pdCommInterface pd) (nodePeer peer) signal
     tid <- forkIO (timeoutHandler rpcId)
     let handler = ResponseHandler { rhRequest          = request
                                   , rhRecipient        = peer
@@ -72,6 +70,9 @@ sendRequest pd reqType peer onFailure onSuccess = do
                                   , rhHandler          = onSuccess
                                   }
     return $! M.insert rpcId handler handlers
+  -- Send the request after the response handler was put in place to
+  -- make sure that the response is not received before.
+  sendTo (pdCommInterface pd) (nodePeer peer) (Request rpcId request)
   where
     timeoutHandler rpcId = do
       threadDelay . configResponseTimeout $ pdConfig pd
@@ -86,7 +87,8 @@ sendRequest pd reqType peer onFailure onSuccess = do
             | rhTimeoutHandlerId == myTid -> (M.delete rpcId handlers, True)
           _                               -> (handlers, False)
       when ok $ do
-        putStrLn $ "Request " ++ show reqType ++ " with " ++ show rpcId ++ " timed out"
+        putStrLn $ "Request " ++ show reqType ++ " sent to "
+                ++ show (nodePeer peer) ++ " with " ++ show rpcId ++ " timed out"
         onFailure
 
 -- | Synchronous variant of 'sendRequest'.
