@@ -6,6 +6,7 @@ module Network.PeerDiscovery
 
 import Control.Concurrent
 import Control.Concurrent.Async
+import Control.Concurrent.STM
 import Control.Monad
 import Network.Socket hiding (recvFrom, sendTo)
 import Prelude
@@ -32,7 +33,7 @@ withPeerDiscovery
   -> (PeerDiscovery cm -> IO r)
   -> IO r
 withPeerDiscovery pdConfig joinNetwork mskey commMethod port k = do
-  pdBootstrapped     <- newMVar False
+  pdBootstrapState   <- newTVarIO BootstrapNeeded
   pdPublicPort       <- newMVar $ if joinNetwork then Just port else Nothing
   pdSecretKey        <- maybe C.generateSecretKey pure mskey
   let pdPublicKey    = C.toPublic pdSecretKey
@@ -44,23 +45,14 @@ withPeerDiscovery pdConfig joinNetwork mskey commMethod port k = do
      $ \_ -> withAsync (dispatcher pd)
      $ \_ -> k pd
 
--- | Find peers to connect to. If peer lookup fails a subsequent number of
--- times, we assume that the routing table is corrupted. We then reset its
--- state, return empty list and require that 'bootstrap' is called to repopulate
--- the routing table.
+-- | Find peers to connect to. If peer lookup fails a subsequent
+-- number of times, an empty list is returned. This indicates a
+-- network failure or that the routing table is somehow corrupted.
 findPeers :: PeerDiscovery cm -> IO [Peer]
 findPeers pd@PeerDiscovery{..} = loop (configLookupTries pdConfig)
   where
     loop :: Int -> IO [Peer]
-    loop 0 = do
-      -- Peer lookup operation failed to return any peers a couple of times. We
-      -- assume that the routing table is somehow corrupted, hence we need to
-      -- reset its state and bootstrap the instance again.
-      modifyMVar_ pdBootstrapped $ \bootstrapped -> do
-        when bootstrapped $ modifyMVar_ pdRoutingTable $ \_ ->
-          return . initRoutingTable $ mkPeerId pdPublicKey
-        return False
-      return []
+    loop 0 = return []
     loop k = do
       peers <- map nodePeer <$> (peerLookup pd =<< randomPeerId)
       if null peers

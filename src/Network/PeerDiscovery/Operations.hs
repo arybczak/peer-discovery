@@ -25,11 +25,12 @@ bootstrap
   :: PeerDiscovery cm
   -> Node -- ^ Initial peer
   -> IO Bool
-bootstrap pd node = modifyMVar (pdBootstrapped pd) $ \case
-  True  -> return (True, True)
-  False -> do
-    -- Check if the initial peer is alive.
-    sendRequestSync pd (Ping Nothing) node (return (False, False)) $ \Pong -> do
+bootstrap pd node = join . atomically $ readTVar (pdBootstrapState pd) >>= \case
+  BootstrapDone       -> return $ return True
+  BootstrapInProgress -> retry
+  BootstrapNeeded     -> do
+    writeTVar (pdBootstrapState pd) BootstrapInProgress
+    return $ sendRequestSync pd (Ping Nothing) node failure $ \Pong -> do
       readMVar (pdPublicPort pd) >>= \case
         Nothing   -> return ()
         Just port -> do
@@ -52,8 +53,16 @@ bootstrap pd node = modifyMVar (pdBootstrapped pd) $ \case
         targetId <- randomPeerId
         -- Populate part of the routing table holding nodes far from us.
         if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
-          then (True, True) <$ peerLookup pd targetId
+          then peerLookup pd targetId >> success
           else loop
+  where
+    failure = do
+      atomically $ writeTVar (pdBootstrapState pd) BootstrapNeeded
+      return False
+
+    success = do
+      atomically $ writeTVar (pdBootstrapState pd) BootstrapDone
+      return True
 
 ----------------------------------------
 
@@ -244,12 +253,11 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
       -- under his IP address and received port number, so we insert him into
       -- our routing table. In case he lied it's not a big deal, he either won't
       -- make it or will be evicted soon.
-      !table <- readMVar pdBootstrapped >>= \case
+      !table <- atomically (readTVar pdBootstrapState) >>= \case
         -- Do not modify routing table until bootstrap was completed. This
         -- prevents an attacker from spamming us with requests during bootstrap
         -- phase and possibly gaining large influence in the routing table.
-        False -> return oldTable
-        True  -> case mnode of
+        BootstrapDone -> case mnode of
           -- If it comes to nodes who send us requests, we only insert them into
           -- the table if the highest bit of their id is different than
           -- ours. This way a potential adversary:
@@ -287,6 +295,7 @@ handleRequest pd@PeerDiscovery{..} peer rpcId req = case req of
               -- of the node if it's in our routing table.
               return $ clearTimeoutPeer node oldTable
           _ -> return oldTable
+        _ -> return oldTable
       return (table, findClosest (configK pdConfig) fnTargetId table)
     sendResponse peer $ ReturnNodesR (ReturnNodes peers)
   PingR Ping{..} ->

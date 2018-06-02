@@ -42,6 +42,7 @@ module Network.PeerDiscovery.Types
     -- * Communication abstractions
   , CommInterface(..)
     -- * PeerDiscovery
+  , BootstrapState(..)
   , PeerDiscovery(..)
   ) where
 
@@ -49,6 +50,7 @@ import Codec.CBOR.Decoding
 import Codec.CBOR.Encoding
 import Codec.Serialise
 import Control.Concurrent
+import Control.Concurrent.STM
 import Data.Bits
 import Data.Functor.Identity
 import Data.Monoid
@@ -339,10 +341,13 @@ data CommInterface = CommInterface
   , sendTo   :: !(Peer -> Signal -> IO ())
   }
 
+data BootstrapState = BootstrapNeeded | BootstrapInProgress | BootstrapDone
+  deriving (Eq, Show)
+
 -- | Primary object of interest.
 data PeerDiscovery cm = PeerDiscovery
   { pdBindAddr         :: !Peer
-  , pdBootstrapped     :: !(MVar Bool)
+  , pdBootstrapState   :: !(TVar BootstrapState)
   , pdPublicPort       :: !(MVar (Maybe PortNumber))
   , pdPublicKey        :: !C.PublicKey
   , pdSecretKey        :: !C.SecretKey

@@ -22,44 +22,51 @@ import Network.PeerDiscovery.Util
 refresher :: PeerDiscovery cm -> IO r
 refresher pd@PeerDiscovery{..} = forever $ do
   threadDelay $ (5 * minute) `quot` configSpeedupFactor pdConfig
-  -- Perform random peer lookup each 5 minutes in order to keep the routing
-  -- table fresh.
-  void $ peerLookup pd =<< randomPeerId
-  -- Test connectivity of nodes in the routing table that failed to return the
-  -- response to FindNode request by periodically sending them random FindNode
-  -- requests (note that we can't use Ping requests for that as in principle a
-  -- node might ignore all FindNode requests, but respond to Ping request and
-  -- occupy a space in our routing table while being useless).
-  --
-  -- If any of them consecutively fails to respond a specific number of times,
-  -- we then check whether the replacement cache of the corresponding bucket is
-  -- not empty and replace it with the first node from the cache that responds
-  -- (if replacement cache is empty, we leave it be).
-  --
-  -- Note that the whole policy is strategically constructed so that in case of
-  -- network failure (i.e. all nodes stop responding) we don't modify the
-  -- structure of the routing table (except of increasing timeout counts).
-  findNode <- do
-    publicPort <- readMVar pdPublicPort
-    myId <- withMVarP pdRoutingTable rtId
-    return $ \nid -> FindNode { fnPeerId     = myId
-                              , fnPublicPort = publicPort
-                              , fnTargetId   = nid
-                              }
-  modifyMVar_ pdRoutingTable $ \table -> do
-    -- TODO: might use forConcurrently here to speed things up.
-    tree <- F.forM (rtTree table) $ \bucket -> do
-      queue <- newTQueueIO
-      let timedout = catMaybes . F.toList $ S.mapWithIndex
-            (\i ni -> if niTimeoutCount ni > 0 then Just (i, ni) else Nothing)
-            (bucketNodes bucket)
-      F.forM_ timedout $ \(i, ni@NodeInfo{..}) -> do
-        targetId <- randomPeerId
-        sendRequest pd (findNode targetId) niNode
-          (      atomically $ writeTQueue queue (i, ni, False))
-          (\_ -> atomically $ writeTQueue queue (i, ni, True))
-      updateBucket findNode queue (length timedout) bucket Nothing
-    return table { rtTree = tree }
+  join . atomically $ readTVar pdBootstrapState >>= \case
+    BootstrapNeeded     -> retry
+    BootstrapInProgress -> retry
+    BootstrapDone       -> return $ do
+      -- Perform random peer lookup each 5 minutes in order to keep
+      -- the routing table fresh.
+      void $ peerLookup pd =<< randomPeerId
+      -- Test connectivity of nodes in the routing table that failed
+      -- to return the response to FindNode request by periodically
+      -- sending them random FindNode requests (note that we can't use
+      -- Ping requests for that as in principle a node might ignore
+      -- all FindNode requests, but respond to Ping request and occupy
+      -- a space in our routing table while being useless).
+      --
+      -- If any of them consecutively fails to respond a specific
+      -- number of times, we then check whether the replacement cache
+      -- of the corresponding bucket is not empty and replace it with
+      -- the first node from the cache that responds (if replacement
+      -- cache is empty, we leave it be).
+      --
+      -- Note that the whole policy is strategically constructed so
+      -- that in case of network failure (i.e. all nodes stop
+      -- responding) we don't modify the structure of the routing
+      -- table (except of increasing timeout counts).
+      findNode <- do
+        publicPort <- readMVar pdPublicPort
+        myId <- withMVarP pdRoutingTable rtId
+        return $ \nid -> FindNode { fnPeerId     = myId
+                                  , fnPublicPort = publicPort
+                                  , fnTargetId   = nid
+                                  }
+      modifyMVar_ pdRoutingTable $ \table -> do
+        -- TODO: might use forConcurrently here to speed things up.
+        tree <- F.forM (rtTree table) $ \bucket -> do
+          queue <- newTQueueIO
+          let timedout = catMaybes . F.toList $ S.mapWithIndex
+                (\i ni -> if niTimeoutCount ni > 0 then Just (i, ni) else Nothing)
+                (bucketNodes bucket)
+          F.forM_ timedout $ \(i, ni@NodeInfo{..}) -> do
+            targetId <- randomPeerId
+            sendRequest pd (findNode targetId) niNode
+              (      atomically $ writeTQueue queue (i, ni, False))
+              (\_ -> atomically $ writeTQueue queue (i, ni, True))
+          updateBucket findNode queue (length timedout) bucket Nothing
+        return table { rtTree = tree }
   where
     minute = 60 * 1000000
 
