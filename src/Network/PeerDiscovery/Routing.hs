@@ -10,7 +10,6 @@ module Network.PeerDiscovery.Routing
   ) where
 
 import Data.Functor.Identity
-import Data.List
 import Prelude
 import qualified Data.Foldable as F
 import qualified Data.Sequence as S
@@ -22,7 +21,7 @@ import Network.PeerDiscovery.Util
 initRoutingTable :: PeerId -> RoutingTable
 initRoutingTable peerId =
   RoutingTable { rtId   = peerId
-               , rtTree = Leaf (Bucket S.empty [])
+               , rtTree = Leaf (Bucket S.empty S.empty)
                }
 
 -- | Insert a peer into the routing table. If a peer with the same identifier,
@@ -129,7 +128,7 @@ insertPeerImpl updateExistingNode conf peer rt =
               -- the appropriate one.
               let testBit          = (`testPeerIdBit` depth) . nodeId
                   (left, right)    = S.partition (testBit . niNode) nodes
-                  (lCache, rCache) = partition testBit cache
+                  (lCache, rCache) = S.partition testBit cache
               in go myBranch depth $ Split (Leaf $ Bucket left lCache)
                                            (Leaf $ Bucket right rCache)
             | otherwise -> pure . Leaf $
@@ -139,8 +138,11 @@ insertPeerImpl updateExistingNode conf peer rt =
               -- are. Otherwise we insert the node into the replacement cache.
               case S.findIndexR ((> configMaxTimeouts conf) . niTimeoutCount) nodes of
                 Just nodeIdx -> Bucket (node S.<| S.deleteAt nodeIdx nodes) cache
-                Nothing      -> Bucket nodes $
-                  peer : take (configCacheSize conf - 1) (delete peer cache)
+                Nothing      ->
+                  let newCache = case S.elemIndexL peer cache of
+                        Just n  -> S.deleteAt n cache
+                        Nothing -> cache
+                  in Bucket nodes $ peer S.<| S.take (configCacheSize conf - 1) newCache
       Split left right ->
         let peerBit = testPeerIdBit (nodeId peer) depth
             myBit   = testPeerIdBit (rtId rt) depth

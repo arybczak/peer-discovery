@@ -359,7 +359,7 @@ performRoutingTableMaintenance pd@PeerDiscovery{..} = do
       -> TQueue (Int, NodeInfo, Bool)
       -> Int
       -> Bucket
-      -> Maybe [(Node, Bool)]
+      -> Maybe (Seq.Seq (Node, Bool))
       -> IO Bucket
     updateBucket _ _ 0 bucket mcache = case mcache of
       -- If there were no attempts to ping the cache, no node timed out enough
@@ -369,7 +369,7 @@ performRoutingTableMaintenance pd@PeerDiscovery{..} = do
       -- replace the old cache. We ignore whether nodes in cache were alive or
       -- not as it doesn't matter; they will either be ignored during the next
       -- iteration or replaced by new incoming nodes.
-      Just cache -> return bucket { bucketCache = map fst cache }
+      Just cache -> return bucket { bucketCache = fst <$> cache }
     updateBucket findNode queue k bucket mcache = do
       (i, NodeInfo{..}, respondedCorrectly) <- atomically $ readTQueue queue
       if | respondedCorrectly -> updateBucket findNode queue (k - 1)
@@ -383,8 +383,9 @@ performRoutingTableMaintenance pd@PeerDiscovery{..} = do
                  (node, ) <$> sendRequestSync pd (findNode targetId) node
                    (      return False)
                    (\_ -> return True)
-             case break snd cache of
-               (dead, (alive, _) : rest) ->
+             let (dead, maybeHasAlive) = Seq.breakl snd cache
+             case Seq.viewl maybeHasAlive of
+               (alive, _) Seq.:< rest ->
                  -- Pick the first alive node in the cache and replace the dead
                  -- one in the bucket with it.
                  let newNodeInfo = NodeInfo
@@ -394,8 +395,9 @@ performRoutingTableMaintenance pd@PeerDiscovery{..} = do
                      newBucket = bucket
                        { bucketNodes = Seq.update i newNodeInfo (bucketNodes bucket)
                        }
-                 in updateBucket findNode queue (k - 1) newBucket $ Just (dead ++ rest)
-               (_dead, []) ->
+                 in updateBucket findNode queue (k - 1) newBucket
+                                 (Just $ dead Seq.>< rest)
+               Seq.EmptyL ->
                  -- All nodes in the replacement cache are dead - most likely
                  -- explanation is network failure, so we don't do anything in
                  -- this case.

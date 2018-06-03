@@ -220,7 +220,7 @@ data RoutingTree a = Leaf !a
 
 data Bucket = Bucket
   { bucketNodes :: !(S.Seq NodeInfo)
-  , bucketCache :: ![Node]
+  , bucketCache :: !(S.Seq Node)
   } deriving (Eq, Show)
 
 ----------------------------------------
