@@ -67,20 +67,61 @@ import qualified Data.Sequence as S
 
 import Network.PeerDiscovery.Util
 
+-- | Configuration of the peer discovery instance. Comprises of Kademlia
+-- specific parameters (@alpha@, @k@, @d@, @b@, cache size) as well as a few other,
+-- library specific settings.
+--
+-- The only Kademlia parameter that needs to be constant amongst all of the
+-- nodes in the network is @k@ as it affects the maximum size of list in
+-- ReturnNodes response and a node only considers responses containing no more
+-- than @k@ nodes valid.
+--
+-- In particular, from the security point of view it is very important that you
+-- estimate lower bound of supernodes (nodes that are publicly addressable and
+-- choose to become part of the network) in the network and adjust parameter @b@
+-- to accomodate that. It is because from the structure of the routing table it
+-- follows that a branch holding nodes from approximately half of the network
+-- has capacity for @k*(2^b - 1)@ nodes. Because it is the only part of the
+-- routing table we allow unknown (i.e. ones that are not already part of the
+-- network) nodes into, to protect the network from Sybil/Eclipse attack this
+-- branch should be near full at all times. Example: there are 100 supernodes in
+-- the network. For the default configuration (@k@ = 16, @b@ = 3) the first
+-- branch can hold up to 112 nodes. However, half of the network is 50, so for
+-- each node there will be approximately 62 free positions (6200 in total) that
+-- can be easily filled by an attacker with malicious entities. Hence it's
+-- important to lower the @b@ parameter to 2 (or even 1 to be safe) so that
+-- bootstrapped network will have these branches filled, resulting in strong
+-- resistance to mentioned attacks. One downside is that after the initial
+-- network has bootstrapped (i.e. formed a dense graph with all of the mentioned
+-- branches full), legitimate nodes with desire to become supernodes will have
+-- to wait their turn (i.e. until there is a free spot in the branch of one of
+-- the nodes in the network).
+--
+-- Note that @b@ only affects internal capacity of the routing table, hence as
+-- the minimum size of the network grows it can (but doesn't have to be, due to
+-- Kademlia design peer lookup operations will work fine even if it's kept at 1,
+-- it'll just take more requests to reach the same state) be increased for newer
+-- versions of clients as they will seamlessly interoperate with older ones.
 data Config = Config
-  { configAlpha             :: !Int -- ^ Concurrency parameter.
+  { configAlpha             :: !Int -- ^ Concurrency parameter, i.e. how many
+                                    -- peers in parallel we try to contact
+                                    -- during single iteration in the peer
+                                    -- lookup.
   , configK                 :: !Int -- ^ Bucket size.
-  , configD                 :: !Int -- ^ Number of distinct lookup paths.
+  , configD                 :: !Int -- ^ Number of distinct lookup paths during
+                                    -- peer lookup operation.
   , configB                 :: !Int -- ^ Maximum depth of the routing tree.
   , configCacheSize         :: !Int -- ^ Size of the bucket replacement cache.
   , configMaxTimeouts       :: !Int -- ^ Number of acceptable timeouts before
                                     --   eviction from the routing tree.
   , configResponseTimeout   :: !Int -- ^ Response timeout in microseconds.
-  , configSpeedupFactor     :: !Int -- ^ Speedup factor for worker responsible
-                                    -- for maintenance of the routing table.
+  , configSpeedupFactor     :: !Int -- ^ Speedup factor for how often the worker
+                                    -- that does maintenance of the routing
+                                    -- table should be run (needed for testing
+                                    -- purposes).
   , configLookupTries       :: !Int -- ^ The amount of times we try to lookup
-                                    -- peers before concluding that the routing
-                                    -- table is corrupt and resetting its state.
+                                    -- peers before giving up and returning
+                                    -- empty list as a result.
   }
 
 defaultConfig :: Config
@@ -88,8 +129,8 @@ defaultConfig = Config
   { configAlpha             = 3
   , configK                 = 16
   , configD                 = 8
-  , configB                 = 5
-  , configCacheSize         = 5
+  , configB                 = 3
+  , configCacheSize         = 8
   , configMaxTimeouts       = 5
   , configResponseTimeout   = 500000
   , configSpeedupFactor     = 1
