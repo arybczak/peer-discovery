@@ -35,8 +35,11 @@ bootstrap pd node = join . atomically $ readTVar (pdBootstrapState pd) >>= \case
   BootstrapInProgress -> retry
   bootstrapState      -> do
     writeTVar (pdBootstrapState pd) BootstrapInProgress
-    return . (`onException` result bootstrapState) $ do
-      sendRequestSync pd (Ping Nothing) node (result bootstrapState) $ \Pong -> do
+    -- TODO: make it so that if an exeption is received mid-bootstrap, we
+    -- restore the state or MVarS modified. I think some consideration is
+    -- required in order to do that and avoid possibility of deadlocks.
+    return . (`onException` result False bootstrapState) $ do
+      sendRequestSync pd (Ping Nothing) node (result False bootstrapState) $ \Pong -> do
         readMVar (pdPublicPort pd) >>= \case
           Nothing   -> return ()
           Just port -> do
@@ -59,12 +62,12 @@ bootstrap pd node = join . atomically $ readTVar (pdBootstrapState pd) >>= \case
           targetId <- randomPeerId
           -- Populate part of the routing table holding nodes far from us.
           if testPeerIdBit myId 0 /= testPeerIdBit targetId 0
-            then peerLookup pd targetId >> result BootstrapDone
+            then peerLookup pd targetId >> result True BootstrapDone
             else loop
   where
-    result st = do
-      atomically $ writeTVar (pdBootstrapState pd) BootstrapNeeded
-      return $ st == BootstrapDone
+    result ret st = do
+      atomically $ writeTVar (pdBootstrapState pd) st
+      return ret
 
 ----------------------------------------
 
